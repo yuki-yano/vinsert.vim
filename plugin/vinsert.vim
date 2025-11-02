@@ -7,3 +7,4 @@ command! -nargs=? VinsertToggle call denops#notify('vinsert', 'toggle', [<q-args
 command! -nargs=? VinsertStart  call denops#notify('vinsert', 'start',  [<q-args>])
 command!          VinsertStop   call denops#notify('vinsert', 'stop',   [])
 command!          VinsertStatus call denops#notify('vinsert', 'status', [])
+command!          VinsertCancel call denops#notify('vinsert', 'cancel', [])

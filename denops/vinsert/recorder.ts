@@ -9,7 +9,10 @@ export type RecorderHandle = {
 const encoder = new TextEncoder();
 const decoder = new TextDecoder();
 
-export async function startRecording(config: RuntimeConfig): Promise<RecorderHandle> {
+export async function startRecording(
+  config: RuntimeConfig,
+  debug = false,
+): Promise<RecorderHandle> {
   const filepath = await Deno.makeTempFile({ suffix: ".wav" });
   const baseArgs = config.ffmpegArgs.length > 0
     ? config.ffmpegArgs
@@ -30,25 +33,38 @@ export async function startRecording(config: RuntimeConfig): Promise<RecorderHan
     stderr: "piped",
   });
   const process = command.spawn();
-  const stderrPromise = process.stderr ? drainStream(process.stderr) : undefined;
-  console.log(`[vinsert] ffmpeg start: ${config.ffmpegPath} ${args.join(" ")}`);
+  const stderrPromise = process.stderr
+    ? drainStream(process.stderr, debug)
+    : undefined;
+  if (debug) {
+    console.log(
+      `[vinsert] ffmpeg start: ${config.ffmpegPath} ${args.join(" ")}`,
+    );
+  }
   return { process, filepath, stderrPromise };
 }
 
 export async function stopRecording(
   handle: RecorderHandle | null,
   keepAudio: boolean,
+  debug = false,
 ): Promise<Uint8Array> {
   if (!handle) {
     throw new Error("Recorder is not active");
   }
   const { process, filepath, stderrPromise } = handle;
-  await sendQuitSignal(process).catch((error) => {
-    console.warn("[vinsert] stopRecording: failed to signal ffmpeg", error);
+  await sendQuitSignal(process, debug).catch((error) => {
+    if (debug) {
+      console.warn("[vinsert] stopRecording: failed to signal ffmpeg", error);
+    }
   });
   const status = await process.status;
-  const stderrText = await readStderr(stderrPromise);
-  console.log(`[vinsert] stopRecording: ffmpeg exited with code ${status.code}`);
+  const stderrText = await readStderr(stderrPromise, debug);
+  if (debug) {
+    console.log(
+      `[vinsert] stopRecording: ffmpeg exited with code ${status.code}`,
+    );
+  }
   if (!status.success) {
     throw new Error(`ffmpeg exited with code ${status.code}: ${stderrText}`);
   }
@@ -85,7 +101,10 @@ function defaultInputArgs(): string[] {
   }
 }
 
-async function drainStream(stream: ReadableStream<Uint8Array>): Promise<Uint8Array[]> {
+async function drainStream(
+  stream: ReadableStream<Uint8Array>,
+  debug: boolean,
+): Promise<Uint8Array[]> {
   const reader = stream.getReader();
   const chunks: Uint8Array[] = [];
   try {
@@ -95,37 +114,51 @@ async function drainStream(stream: ReadableStream<Uint8Array>): Promise<Uint8Arr
       if (value) chunks.push(value);
     }
   } catch (error) {
-    console.warn("[vinsert] ffmpeg stderr read error", error);
+    if (debug) {
+      console.warn("[vinsert] ffmpeg stderr read error", error);
+    }
   } finally {
     reader.releaseLock();
   }
   return chunks;
 }
 
-async function readStderr(reader?: Promise<Uint8Array[]>): Promise<string> {
+async function readStderr(
+  reader?: Promise<Uint8Array[]>,
+  debug = false,
+): Promise<string> {
   if (!reader) return "";
   try {
     const chunks = await reader;
     if (chunks.length === 0) return "";
     return decoder.decode(concatenate(chunks));
   } catch (error) {
-    console.warn("[vinsert] stderr decode error", error);
+    if (debug) {
+      console.warn("[vinsert] stderr decode error", error);
+    }
     return "";
   }
 }
 
-async function sendQuitSignal(process: Deno.ChildProcess): Promise<void> {
+async function sendQuitSignal(
+  process: Deno.ChildProcess,
+  debug: boolean,
+): Promise<void> {
   const stdin = process.stdin;
   if (!stdin) {
     return;
   }
   try {
-    console.log("[vinsert] stopRecording: sending 'q' to ffmpeg");
+    if (debug) {
+      console.log("[vinsert] stopRecording: sending 'q' to ffmpeg");
+    }
     const writer = stdin.getWriter();
     await writer.write(encoder.encode("q\n"));
     await writer.close();
   } catch (error) {
-    console.warn("[vinsert] stopRecording: write via writer failed", error);
+    if (debug) {
+      console.warn("[vinsert] stopRecording: write via writer failed", error);
+    }
     try {
       await stdin.close();
     } catch {

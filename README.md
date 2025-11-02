@@ -16,7 +16,7 @@
 {
   "yuki-yano/vinsert.vim",
   dependencies = { "vim-denops/denops.vim" },
-  ft = { "lua", "vim" },
+  cmd = { 'VinsertToggle' },
   config = function()
     vim.g.vinsert_openai_api_key = os.getenv("OPENAI_API_KEY") or ""
     -- Adjust the capture backend per platform (see notes below)
@@ -40,6 +40,13 @@ vim.g.vinsert_system_prompt = [[あなたは日本語の音声起こしアシス
 vim.g.vinsert_text_stream_flush_ms = 50
 vim.g.vinsert_text_stream_batch_tokens = 20
 vim.g.vinsert_indicator = "virt" -- virt | statusline | cmdline | none
+vim.g.vinsert_indicator_highlights = {
+  idle = "DiagnosticHint",
+  rec = "DiagnosticError",
+  stt = "DiagnosticWarn",
+  gen = "DiagnosticInfo",
+  error = "DiagnosticError",
+}
 ```
 
 ## Usage
@@ -49,6 +56,27 @@ vim.g.vinsert_indicator = "virt" -- virt | statusline | cmdline | none
 - `:VinsertToggle scratch`: show streaming output in a scratch buffer (filetype `markdown.vinsert`).
 - `:VinsertStatus`: print current phase and mode.
 - `:VinsertStop`: abort recording if something goes wrong.
+- `:VinsertCancel`: stop recording immediately without running transcription or generation.
+
+### Audio capture setup
+
+`vinsert.vim` tries to pick sensible defaults for `ffmpeg` input devices:
+
+- macOS: `{ "-f", "avfoundation", "-i", ":0" }`
+- Linux: `{ "-f", "pulse", "-i", "default" }`
+- Windows: `{ "-f", "dshow", "-i", "audio=default" }`
+
+Override them if your microphone lives on a different device, e.g.
+
+```lua
+vim.g.vinsert_ffmpeg_args = { "-f", "avfoundation", "-i", ":3" }
+```
+
+Useful commands to discover device IDs:
+
+- macOS: `ffmpeg -f avfoundation -list_devices true -i ""`
+- Linux: `pactl list short sources` or `arecord -l`
+- Windows: `ffmpeg -list_devices true -f dshow -i dummy`
 
 ### Notifying on completion
 
@@ -72,6 +100,58 @@ vim.api.nvim_create_autocmd("User", {
 
 `g:vinsert_last_completion` contains `mode`, `success`, `transcript`, and `final` fields so you can customise the notification.
 
+### Indicator highlight customisation
+
+Virt-text indicators inherit their colours from diagnostic highlight groups by default. Override the table to blend in with your colourscheme:
+
+```lua
+vim.g.vinsert_indicator_highlights = {
+  idle = "Comment",
+  rec = "WarningMsg",
+  stt = "DiagnosticWarn",
+  gen = "DiagnosticInfo",
+  error = "DiagnosticError",
+}
+```
+
+Missing keys fall back to the default palette, so you only need to override the entries you want to change.
+
+### Prompt customisation
+
+The default system prompt keeps wording as-is while adding punctuation and line breaks. Override it if you need a different tone:
+
+```lua
+vim.g.vinsert_system_prompt = [[Please rewrite the transcript as bullet points in English.]]
+```
+
+### Debug logging
+
+Enable verbose logging when you need to inspect ffmpeg commands or phase transitions:
+
+```lua
+vim.g.vinsert_debug = true
+```
+
+Leave it unset or `false` for quiet operation.
+
+### Statusline integration
+
+`vinsert#status()` exposes the current mode, phase, and indicator label so statusline plugins can consume it. For example, with lualine:
+
+```lua
+require("lualine").setup({
+  sections = {
+    lualine_x = {
+      function()
+        return vim.fn["vinsert#statusline"]()
+      end,
+    },
+  },
+})
+```
+
+If you need more control, call `vim.fn["vinsert#status"]()` instead and inspect the returned table.
+
 ## Deno Tasks
 
 `deno.json` defines helper tasks:
@@ -91,14 +171,4 @@ The test suite covers configuration normalization, scratch buffer helpers, and i
 
 ## Notes
 
-- Default ffmpeg arguments are selected per platform when `g:vinsert_ffmpeg_args` is empty:
-  - macOS: `{ "-f", "avfoundation", "-i", ":0" }`
-  - Linux: `{ "-f", "pulse", "-i", "default" }`
-  - Windows: `{ "-f", "dshow", "-i", "audio=default" }`
-  Override the list if your environment uses a different device name (e.g. on macOS: `vim.g.vinsert_ffmpeg_args = { '-f', 'avfoundation', '-i', ':3' }`).
-- How to list audio capture devices:
-  - macOS: `ffmpeg -f avfoundation -list_devices true -i ""`
-  - Linux: `pactl list short sources` or `arecord -l`, then use the name with `-f pulse -i <name>`
-  - Windows: `ffmpeg -list_devices true -f dshow -i dummy`
-- The default system prompt tells the LLM to keep the original wording and only add punctuation/line breaks. Override `g:vinsert_system_prompt` if you need a different behaviour.
-- During recording (`rec`), transcription (`stt`), generation (`gen`), and error states, a virt-text indicator appears by default. Errors reset the indicator and print a message detailing the issue.
+- During recording (`rec`), transcription (`stt`), generation (`gen`), and error states, a virt-text indicator appears by default. Errors reset the indicator and print a message detailing the issue (see the configuration sections above for highlight tweaks and statusline integration).

@@ -1,14 +1,18 @@
-import { fn, helper, type Denops } from "./deps/denops.ts";
-import type { RuntimeConfig } from "./config.ts";
+import { type Denops, fn, helper } from "./deps/denops.ts";
+import {
+  DEFAULT_INDICATOR_HIGHLIGHTS,
+  type IndicatorHighlights,
+  type RuntimeConfig,
+} from "./config.ts";
 
-type IndicatorPhase = "idle" | "rec" | "stt" | "gen" | "error";
+export type IndicatorPhase = "idle" | "rec" | "stt" | "gen" | "error";
 
-const VIRT_TEXT: Record<IndicatorPhase, { label: string; highlight: string }> = {
-  idle: { label: "○ IDLE", highlight: "Comment" },
-  rec: { label: "● REC", highlight: "DiffDelete" },
-  stt: { label: "⌛ STT…", highlight: "DiagnosticSignWarn" },
-  gen: { label: "✎ GEN…", highlight: "DiagnosticSignInfo" },
-  error: { label: "⚠ ERROR", highlight: "DiagnosticSignError" },
+const VIRT_LABELS: Record<IndicatorPhase, string> = {
+  idle: "○ IDLE",
+  rec: "● REC",
+  stt: "⌛ STT…",
+  gen: "✎ GEN…",
+  error: "⚠ ERROR",
 };
 
 let namespaceId: number | null = null;
@@ -17,13 +21,18 @@ let blinkTimer: number | null = null;
 let blinkToggle = false;
 let anchor: { bufnr: number; row: number } | null = null;
 
-export function setIndicatorAnchor(value: { bufnr: number; row: number }): void {
+export function setIndicatorAnchor(
+  value: { bufnr: number; row: number },
+): void {
   anchor = value;
 }
 
 async function ensureNamespace(denops: Denops): Promise<number> {
   if (namespaceId !== null) return namespaceId;
-  namespaceId = await denops.call("nvim_create_namespace", "vinsert.indicator") as number;
+  namespaceId = await denops.call(
+    "nvim_create_namespace",
+    "vinsert.indicator",
+  ) as number;
   return namespaceId;
 }
 
@@ -34,7 +43,10 @@ export async function setPhase(
 ): Promise<void> {
   if (config.indicatorMode !== "virt") {
     if (phase === "error") {
-      await helper.echoerr(denops, "[vinsert] エラーが発生しました。詳細はメッセージを確認してください。");
+      await helper.echoerr(
+        denops,
+        "[vinsert] An error occurred. Check :messages for details.",
+      );
     }
     return;
   }
@@ -50,7 +62,11 @@ export async function setPhase(
   }
   const { bufnr, row } = anchor!;
   const ns = await ensureNamespace(denops);
-  const virtText = buildVirtText(phase, VIRT_TEXT[phase].label);
+  const virtText = buildVirtText(
+    phase,
+    VIRT_LABELS[phase],
+    config.indicatorHighlights,
+  );
   const markId = await denops.call(
     "nvim_buf_set_extmark",
     bufnr,
@@ -64,7 +80,7 @@ export async function setPhase(
   ) as number;
   virtState = { bufnr, markId };
   if (phase === "rec") {
-    startBlink(denops, bufnr, ns, row);
+    startBlink(denops, bufnr, ns, row, config.indicatorHighlights);
   } else {
     stopBlink();
   }
@@ -74,17 +90,32 @@ export async function clearIndicator(denops: Denops): Promise<void> {
   await removeIndicator(denops, true);
 }
 
-export function buildVirtText(phase: IndicatorPhase, label: string): Array<[string, string]> {
-  const highlight = VIRT_TEXT[phase].highlight;
+export function buildVirtText(
+  phase: IndicatorPhase,
+  label: string,
+  highlights: IndicatorHighlights,
+): Array<[string, string]> {
+  const highlight = highlights?.[phase] ?? DEFAULT_INDICATOR_HIGHLIGHTS[phase];
   return [[label, highlight]];
 }
 
-function startBlink(denops: Denops, bufnr: number, ns: number, row: number): void {
+export function indicatorLabel(phase: IndicatorPhase): string {
+  return VIRT_LABELS[phase];
+}
+
+function startBlink(
+  denops: Denops,
+  bufnr: number,
+  ns: number,
+  row: number,
+  highlights: IndicatorHighlights,
+): void {
   stopBlink();
   blinkTimer = setInterval(async () => {
     blinkToggle = !blinkToggle;
     if (!virtState) return;
     const label = blinkToggle ? "● REC" : "○ REC";
+    try {
       await denops.call(
         "nvim_buf_set_extmark",
         bufnr,
@@ -93,10 +124,13 @@ function startBlink(denops: Denops, bufnr: number, ns: number, row: number): voi
         -1,
         {
           id: virtState.markId,
-          virt_text: buildVirtText("rec", label),
+          virt_text: buildVirtText("rec", label, highlights),
           virt_text_pos: "eol",
         },
-      ).catch(() => {});
+      );
+    } catch {
+      // noop
+    }
   }, 500);
 }
 
@@ -108,12 +142,17 @@ function stopBlink(): void {
   blinkToggle = false;
 }
 
-async function removeIndicator(denops: Denops, resetAnchor: boolean): Promise<void> {
+async function removeIndicator(
+  denops: Denops,
+  resetAnchor: boolean,
+): Promise<void> {
   stopBlink();
   if (virtState) {
     const { bufnr, markId } = virtState;
     const ns = await ensureNamespace(denops);
-    await denops.call("nvim_buf_del_extmark", bufnr, ns, markId).catch(() => {});
+    await denops.call("nvim_buf_del_extmark", bufnr, ns, markId).catch(
+      () => {},
+    );
     virtState = null;
   }
   if (resetAnchor) {

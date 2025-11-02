@@ -17,7 +17,10 @@ export async function transcribeServer(
   try {
     return await transcribeSSE(wav, options);
   } catch (error) {
-    console.warn("[vinsert] SSE transcription failed, falling back to batch:", error);
+    console.warn(
+      "[vinsert] SSE transcription failed, falling back to batch:",
+      error,
+    );
     return await transcribeBatch(wav, options);
   }
 }
@@ -73,7 +76,9 @@ async function transcribeSSE(
   const contentType = response.headers.get("content-type") ?? "";
   if (!contentType.includes("text/event-stream")) {
     // API responded with JSON (no SSE). Fallback to standard handling.
-    options.onStatus?.("[vinsert] STT: SSE not available, falling back to batch");
+    options.onStatus?.(
+      "[vinsert] STT: SSE not available, falling back to batch",
+    );
     const json = await response.json() as { text?: string };
     if (typeof json.text === "string" && json.text.length > 0) {
       return json.text;
@@ -126,7 +131,9 @@ async function transcribeSSE(
 
 function buildFormData(wav: Uint8Array, options: TranscribeOptions): FormData {
   const form = new FormData();
-  const file = new File([wav], "audio.wav", { type: "audio/wav" });
+  const file = new File([toArrayBuffer(wav)], "audio.wav", {
+    type: "audio/wav",
+  });
   form.append("file", file);
   form.append("model", options.config.sttModel);
   form.append("response_format", "json");
@@ -137,4 +144,10 @@ function buildFormData(wav: Uint8Array, options: TranscribeOptions): FormData {
     form.append("prompt", options.config.biasPrompt);
   }
   return form;
+}
+
+function toArrayBuffer(view: Uint8Array): ArrayBuffer {
+  const buffer = new ArrayBuffer(view.byteLength);
+  new Uint8Array(buffer).set(view);
+  return buffer;
 }

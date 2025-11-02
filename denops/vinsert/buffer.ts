@@ -76,7 +76,6 @@ export async function insertStream(
 export async function finalizeUndo(denops: Denops): Promise<void> {
   await helper.execute(denops, "silent! call win_execute(winnr(), 'normal! \\<Esc>')");
 }
-
 function splitLines(text: string): string[] {
   const normalized = text.replaceAll("\r\n", "\n").replaceAll("\r", "\n");
   return normalized.split("\n");

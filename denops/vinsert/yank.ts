@@ -1,4 +1,5 @@
-import { helper, variable, type Denops } from "./deps/denops.ts";
+import { type Denops, variable } from "./deps/denops.ts";
+import { logInfo } from "./logger.ts";
 
 export async function yankToRegister(
   denops: Denops,
@@ -6,5 +7,5 @@ export async function yankToRegister(
   register: string,
 ): Promise<void> {
   await variable.register.set(denops, register, text);
-  await helper.echo(denops, `[vinsert] 無名レジスタにテキストを保存しました。`);
+  await logInfo(denops, "[vinsert] Saved text to the unnamed register.");
 }

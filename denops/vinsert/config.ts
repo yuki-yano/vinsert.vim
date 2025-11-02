@@ -10,6 +10,14 @@ export type ScratchConfig = {
   filetype: string;
 };
 
+export type IndicatorHighlights = {
+  idle: string;
+  rec: string;
+  stt: string;
+  gen: string;
+  error: string;
+};
+
 export type RuntimeConfig = {
   sttModel: string;
   llmModel: string;
@@ -22,11 +30,25 @@ export type RuntimeConfig = {
   textStreamFlushMs: number;
   textStreamBatchTokens: number;
   indicatorMode: "virt" | "statusline" | "cmdline" | "none";
+  indicatorHighlights: IndicatorHighlights;
   keepAudio: boolean;
   scratch: ScratchConfig;
 };
 
-const STREAMING_MODES: StreamingMode[] = ["server", "progressive", "off", "auto"];
+const STREAMING_MODES: StreamingMode[] = [
+  "server",
+  "progressive",
+  "off",
+  "auto",
+];
+
+export const DEFAULT_INDICATOR_HIGHLIGHTS: IndicatorHighlights = {
+  idle: "DiagnosticHint",
+  rec: "DiagnosticError",
+  stt: "DiagnosticWarn",
+  gen: "DiagnosticInfo",
+  error: "DiagnosticError",
+};
 
 const DEFAULT_CONFIG: RuntimeConfig = {
   sttModel: "gpt-4o-transcribe",
@@ -41,6 +63,7 @@ const DEFAULT_CONFIG: RuntimeConfig = {
   textStreamFlushMs: 50,
   textStreamBatchTokens: 20,
   indicatorMode: "virt",
+  indicatorHighlights: { ...DEFAULT_INDICATOR_HIGHLIGHTS },
   keepAudio: false,
   scratch: {
     split: "botright",
@@ -51,18 +74,46 @@ const DEFAULT_CONFIG: RuntimeConfig = {
 };
 
 export async function loadConfig(denops: Denops): Promise<RuntimeConfig> {
-  const sttStreamingMode = await readStringOption(denops, "vinsert_stt_streaming_mode");
+  const sttStreamingMode = await readStringOption(
+    denops,
+    "vinsert_stt_streaming_mode",
+  );
   const ffmpegArgs = await readArrayOption(denops, "vinsert_ffmpeg_args");
   const config: RuntimeConfig = {
-    sttModel: await readStringOption(denops, "vinsert_stt_model", DEFAULT_CONFIG.sttModel),
-    llmModel: await readStringOption(denops, "vinsert_text_model", DEFAULT_CONFIG.llmModel),
-    language: await readStringOption(denops, "vinsert_language", DEFAULT_CONFIG.language),
-    biasPrompt: await readStringOption(denops, "vinsert_bias_prompt", DEFAULT_CONFIG.biasPrompt),
-    systemPrompt: await readStringOption(denops, "vinsert_system_prompt", DEFAULT_CONFIG.systemPrompt),
-    sttStreamingMode: STREAMING_MODES.includes(sttStreamingMode as StreamingMode)
-      ? (sttStreamingMode as StreamingMode)
-      : DEFAULT_CONFIG.sttStreamingMode,
-    ffmpegPath: await readStringOption(denops, "vinsert_ffmpeg_path", DEFAULT_CONFIG.ffmpegPath),
+    sttModel: await readStringOption(
+      denops,
+      "vinsert_stt_model",
+      DEFAULT_CONFIG.sttModel,
+    ),
+    llmModel: await readStringOption(
+      denops,
+      "vinsert_text_model",
+      DEFAULT_CONFIG.llmModel,
+    ),
+    language: await readStringOption(
+      denops,
+      "vinsert_language",
+      DEFAULT_CONFIG.language,
+    ),
+    biasPrompt: await readStringOption(
+      denops,
+      "vinsert_bias_prompt",
+      DEFAULT_CONFIG.biasPrompt,
+    ),
+    systemPrompt: await readStringOption(
+      denops,
+      "vinsert_system_prompt",
+      DEFAULT_CONFIG.systemPrompt,
+    ),
+    sttStreamingMode:
+      STREAMING_MODES.includes(sttStreamingMode as StreamingMode)
+        ? (sttStreamingMode as StreamingMode)
+        : DEFAULT_CONFIG.sttStreamingMode,
+    ffmpegPath: await readStringOption(
+      denops,
+      "vinsert_ffmpeg_path",
+      DEFAULT_CONFIG.ffmpegPath,
+    ),
     ffmpegArgs: ffmpegArgs,
     textStreamFlushMs: await readNumberOption(
       denops,
@@ -74,12 +125,33 @@ export async function loadConfig(denops: Denops): Promise<RuntimeConfig> {
       "vinsert_text_stream_batch_tokens",
       DEFAULT_CONFIG.textStreamBatchTokens,
     ),
-    indicatorMode: normalizeIndicatorMode(await variable.g.get(denops, "vinsert_indicator")),
-    keepAudio: await readBooleanOption(denops, "vinsert_keep_audio", DEFAULT_CONFIG.keepAudio),
+    indicatorMode: normalizeIndicatorMode(
+      await variable.g.get(denops, "vinsert_indicator"),
+    ),
+    indicatorHighlights: normalizeHighlights(
+      await variable.g.get(denops, "vinsert_indicator_highlights"),
+    ),
+    keepAudio: await readBooleanOption(
+      denops,
+      "vinsert_keep_audio",
+      DEFAULT_CONFIG.keepAudio,
+    ),
     scratch: {
-      split: await readStringOption(denops, "vinsert_scratch_split", DEFAULT_CONFIG.scratch.split),
-      size: await readNumberOption(denops, "vinsert_scratch_size", DEFAULT_CONFIG.scratch.size),
-      focus: await readBooleanOption(denops, "vinsert_scratch_focus", DEFAULT_CONFIG.scratch.focus),
+      split: await readStringOption(
+        denops,
+        "vinsert_scratch_split",
+        DEFAULT_CONFIG.scratch.split,
+      ),
+      size: await readNumberOption(
+        denops,
+        "vinsert_scratch_size",
+        DEFAULT_CONFIG.scratch.size,
+      ),
+      focus: await readBooleanOption(
+        denops,
+        "vinsert_scratch_focus",
+        DEFAULT_CONFIG.scratch.focus,
+      ),
       filetype: "markdown.vinsert",
     },
   };
@@ -139,13 +211,17 @@ async function readArrayOption(
 ): Promise<string[]> {
   const value = await variable.g.get(denops, name);
   if (Array.isArray(value)) {
-    const safe = value.filter((item): item is string => typeof item === "string");
+    const safe = value.filter((item): item is string =>
+      typeof item === "string"
+    );
     return safe;
   }
   return [];
 }
 
-export function normalizeIndicatorMode(value: unknown): "virt" | "statusline" | "cmdline" | "none" {
+export function normalizeIndicatorMode(
+  value: unknown,
+): "virt" | "statusline" | "cmdline" | "none" {
   if (!isString(value)) {
     return DEFAULT_CONFIG.indicatorMode;
   }
@@ -158,4 +234,17 @@ export function normalizeIndicatorMode(value: unknown): "virt" | "statusline" | 
     default:
       return DEFAULT_CONFIG.indicatorMode;
   }
+}
+
+export function normalizeHighlights(value: unknown): IndicatorHighlights {
+  const result: IndicatorHighlights = { ...DEFAULT_INDICATOR_HIGHLIGHTS };
+  if (value && typeof value === "object") {
+    for (const key of ["idle", "rec", "stt", "gen", "error"] as const) {
+      const candidate = (value as Record<string, unknown>)[key];
+      if (isString(candidate) && candidate.length > 0) {
+        result[key] = candidate;
+      }
+    }
+  }
+  return result;
 }
