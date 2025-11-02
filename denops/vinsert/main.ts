@@ -25,7 +25,6 @@ import {
 import { streamGenerate } from "./llm.ts";
 import {
   appendScratch,
-  disposeScratch,
   prepareScratch,
   replaceScratch,
   type ScratchHandle,
@@ -200,7 +199,8 @@ async function finishRecording(denops: Denops): Promise<void> {
     if (batch.length > 0) {
       await handleDelta(denops, batch);
     }
-    if (currentMode === "yank") {
+    const shouldYank = currentMode === "yank" || config.alwaysYank;
+    if (shouldYank) {
       await yankToRegister(denops, lastFinal, '"');
     }
     if (currentMode === "insert") {
@@ -277,9 +277,6 @@ async function resolveApiKey(denops: Denops): Promise<string> {
 async function cleanup(denops: Denops): Promise<void> {
   recorder = null;
   reservation = null;
-  if (scratchHandle) {
-    await disposeScratch(denops, scratchHandle).catch(() => {});
-  }
   scratchHandle = null;
   lastFinal = "";
   phase = "idle";

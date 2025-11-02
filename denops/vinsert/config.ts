@@ -32,6 +32,7 @@ export type RuntimeConfig = {
   indicatorMode: "virt" | "statusline" | "cmdline" | "none";
   indicatorHighlights: IndicatorHighlights;
   keepAudio: boolean;
+  alwaysYank: boolean;
   scratch: ScratchConfig;
 };
 
@@ -65,6 +66,7 @@ const DEFAULT_CONFIG: RuntimeConfig = {
   indicatorMode: "virt",
   indicatorHighlights: { ...DEFAULT_INDICATOR_HIGHLIGHTS },
   keepAudio: false,
+  alwaysYank: false,
   scratch: {
     split: "botright",
     size: 10,
@@ -135,6 +137,11 @@ export async function loadConfig(denops: Denops): Promise<RuntimeConfig> {
       denops,
       "vinsert_keep_audio",
       DEFAULT_CONFIG.keepAudio,
+    ),
+    alwaysYank: await readBooleanOption(
+      denops,
+      "vinsert_always_yank",
+      DEFAULT_CONFIG.alwaysYank,
     ),
     scratch: {
       split: await readStringOption(

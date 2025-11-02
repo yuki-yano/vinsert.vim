@@ -47,6 +47,7 @@ vim.g.vinsert_indicator_highlights = {
   gen = "DiagnosticInfo",
   error = "DiagnosticError",
 }
+vim.g.vinsert_always_yank = false -- set true to always copy the final text into the unnamed register
 ```
 
 ## Usage
@@ -54,6 +55,7 @@ vim.g.vinsert_indicator_highlights = {
 - Insert mode `<C-q>` (default): toggle recording and stream into the buffer.
 - `:VinsertToggle yank`: record and store the final text in the unnamed register (buffer remains untouched).
 - `:VinsertToggle scratch`: show streaming output in a scratch buffer (filetype `markdown.vinsert`).
+- Set `g:vinsert_always_yank = true` if you want to copy the final text to the unnamed register regardless of the selected mode.
 - `:VinsertStatus`: print current phase and mode.
 - `:VinsertStop`: abort recording if something goes wrong.
 - `:VinsertCancel`: stop recording immediately without running transcription or generation.
