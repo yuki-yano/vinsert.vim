@@ -13,5 +13,9 @@ export async function emitCompletionEvent(
     transcript,
     final: finalText,
   });
-  await denops.call("nvim_exec2", "doautocmd <nomodeline> User VinsertComplete", { output: false });
+  await denops.call(
+    "nvim_exec2",
+    "doautocmd <nomodeline> User VinsertComplete",
+    { output: false },
+  );
 }

@@ -1,7 +1,11 @@
 {
   "lock": false,
   "tasks": {
+    "format": "deno fmt",
+    "typecheck": "deno check denops/vinsert/main.ts denops/vinsert/session.ts",
+    "lint": "deno lint",
     "test": "deno test",
-    "cache": "deno cache denops/vinsert/main.ts"
+    "cache": "deno cache denops/vinsert/main.ts",
+    "ci": "deno fmt --check && deno lint && deno check denops/vinsert/main.ts denops/vinsert/session.ts && deno test"
   }
 }

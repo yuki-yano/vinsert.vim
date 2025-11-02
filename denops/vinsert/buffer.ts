@@ -1,4 +1,4 @@
-import { fn, helper, type Denops } from "./deps/denops.ts";
+import { type Denops, fn, helper } from "./deps/denops.ts";
 
 export type InsertReservation = {
   bufnr: number;
@@ -13,7 +13,9 @@ type InsertStreamOptions = {
   append?: boolean;
 };
 
-export async function reserveInsertRange(denops: Denops): Promise<InsertReservation> {
+export async function reserveInsertRange(
+  denops: Denops,
+): Promise<InsertReservation> {
   const bufnr = await fn.bufnr(denops, "%") as number;
   const pos = await fn.getpos(denops, ".") as unknown[];
   const startRow = Number(pos[1]) - 1;
@@ -74,7 +76,10 @@ export async function insertStream(
 }
 
 export async function finalizeUndo(denops: Denops): Promise<void> {
-  await helper.execute(denops, "silent! call win_execute(winnr(), 'normal! \\<Esc>')");
+  await helper.execute(
+    denops,
+    "silent! call win_execute(winnr(), 'normal! \\<Esc>')",
+  );
 }
 function splitLines(text: string): string[] {
   const normalized = text.replaceAll("\r\n", "\n").replaceAll("\r", "\n");
@@ -98,7 +103,9 @@ export function updateReservation(
   }
   const lastLine = lines.at(-1) ?? "";
   reservation.endRow = reservation.startRow + (lines.length - 1);
-  reservation.endCol = lines.length === 1 ? reservation.startCol + lastLine.length : lastLine.length;
+  reservation.endCol = lines.length === 1
+    ? reservation.startCol + lastLine.length
+    : lastLine.length;
 }
 
 export async function sanitizeReservation(
@@ -107,7 +114,10 @@ export async function sanitizeReservation(
   append: boolean,
 ): Promise<InsertReservation> {
   const copy: InsertReservation = { ...reservation };
-  const lineCount = await denops.call("nvim_buf_line_count", reservation.bufnr) as number;
+  const lineCount = await denops.call(
+    "nvim_buf_line_count",
+    reservation.bufnr,
+  ) as number;
   const maxRow = Math.max(lineCount - 1, 0);
   const clampRow = (row: number) => Math.min(Math.max(row, 0), maxRow);
   copy.startRow = clampRow(copy.startRow);
@@ -123,7 +133,17 @@ export async function sanitizeReservation(
   return copy;
 }
 
-async function lineLength(denops: Denops, bufnr: number, row: number): Promise<number> {
-  const lines = await denops.call("nvim_buf_get_lines", bufnr, row, row + 1, true) as string[];
+async function lineLength(
+  denops: Denops,
+  bufnr: number,
+  row: number,
+): Promise<number> {
+  const lines = await denops.call(
+    "nvim_buf_get_lines",
+    bufnr,
+    row,
+    row + 1,
+    true,
+  ) as string[];
   return lines[0]?.length ?? 0;
 }

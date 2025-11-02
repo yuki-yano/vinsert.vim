@@ -1,4 +1,4 @@
-import { helper, type Denops } from "./deps/denops.ts";
+import { type Denops, helper } from "./deps/denops.ts";
 import type { RuntimeConfig } from "./config.ts";
 
 export type ScratchHandle = {
@@ -19,7 +19,12 @@ export async function prepareScratch(
   await denops.call("nvim_buf_set_option", bufnr, "bufhidden", "wipe");
   await denops.call("nvim_buf_set_option", bufnr, "swapfile", false);
   await denops.call("nvim_buf_set_option", bufnr, "modifiable", true);
-  await denops.call("nvim_buf_set_option", bufnr, "filetype", config.scratch.filetype);
+  await denops.call(
+    "nvim_buf_set_option",
+    bufnr,
+    "filetype",
+    config.scratch.filetype,
+  );
   if (!config.scratch.focus) {
     await helper.execute(denops, "wincmd p");
   }
@@ -42,7 +47,13 @@ export async function appendScratch(
 ): Promise<void> {
   const lines = splitLines(text);
   if (lines.length === 0) return;
-  const currentLines = await denops.call("nvim_buf_get_lines", handle.bufnr, 0, -1, true) as string[];
+  const currentLines = await denops.call(
+    "nvim_buf_get_lines",
+    handle.bufnr,
+    0,
+    -1,
+    true,
+  ) as string[];
   if (currentLines.length === 1 && currentLines[0] === "") {
     await replaceScratch(denops, handle, lines.join("\n"));
     return;
@@ -56,7 +67,10 @@ export async function disposeScratch(
   handle: ScratchHandle,
 ): Promise<void> {
   if (handle.winid !== null) {
-    const exists = await denops.call("nvim_win_is_valid", handle.winid) as boolean;
+    const exists = await denops.call(
+      "nvim_win_is_valid",
+      handle.winid,
+    ) as boolean;
     if (exists) {
       await denops.call("nvim_win_close", handle.winid, true);
     }

@@ -9,6 +9,9 @@ Deno.test("splitLines normalizes carriage returns", () => {
 Deno.test("buildSplitCommand respects split direction", () => {
   assertEquals(buildSplitCommand("botright", 10), "botright 10split");
   assertEquals(buildSplitCommand("topleft", 5), "topleft 5split");
-  assertEquals(buildSplitCommand("belowright vsplit", 20), "belowright vsplit 20vsplit");
+  assertEquals(
+    buildSplitCommand("belowright vsplit", 20),
+    "belowright vsplit 20vsplit",
+  );
   assertEquals(buildSplitCommand("", 0), "botright 5split");
 });
