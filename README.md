@@ -173,8 +173,12 @@ the returned table.
 `deno.json` defines helper tasks:
 
 ```bash
-deno task cache   # pre-fetch dependencies and refresh deno.lock
-deno task test    # run unit tests
+deno task cache      # pre-fetch dependencies and refresh deno.lock
+deno task format     # run deno fmt
+deno task lint       # run deno lint
+deno task typecheck  # run deno check over core entry points
+deno task test       # run unit tests
+deno task ci         # run format --check, lint, typecheck, and tests sequentially
 ```
 
 ## Testing

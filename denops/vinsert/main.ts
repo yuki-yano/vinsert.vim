@@ -45,6 +45,11 @@ import {
 
 type SessionId = string;
 
+// Rough conversion factor between tokens and bytes for streaming threshold logic.
+const APPROX_BYTES_PER_TOKEN = 4;
+
+let reservationNamespace: number | null = null;
+
 const sessions = new Map<SessionId, SessionContext>();
 let activeSessionId: SessionId | null = null;
 type AnchorPosition = { bufnr: number; row: number; col: number };
@@ -139,6 +144,7 @@ async function beginRecording(denops: Denops, rawMode: unknown): Promise<void> {
     const anchor = await createInsertAnchor(denops);
     session.insertAnchor = anchor;
     session.indicatorAnchor = { bufnr: anchor.bufnr, row: anchor.row };
+    await initializeSessionReservationMark(denops, session);
     await focusSession(denops, sessionId);
     session.recorder = await startRecording(denops, config);
     session.lastFinal = "";
@@ -239,7 +245,8 @@ async function finishRecording(
     );
     await updateSessionPhase(denops, sessionId, "gen");
     let batch = "";
-    const threshold = Math.max(session.config.textStreamBatchTokens, 1) * 4;
+    const threshold = Math.max(session.config.textStreamBatchTokens, 1) *
+      APPROX_BYTES_PER_TOKEN;
     const flush = (content: string): void => {
       if (!content) return;
       const pending = sessions.get(sessionId);
@@ -287,8 +294,8 @@ async function finishRecording(
     if (shouldYank) {
       await yankToRegister(denops, latest.lastFinal, '"');
     }
-    if (latest.mode === "insert") {
-      await finalizeUndo(denops);
+    if (latest.mode === "insert" && latest.reservation) {
+      await finalizeUndo(denops, latest.reservation.bufnr);
     }
     await logInfo(denops, "[vinsert] Generation finished.");
     await emitCompletionEvent(
@@ -418,6 +425,39 @@ async function createInsertAnchor(denops: Denops): Promise<AnchorPosition> {
   };
 }
 
+async function ensureReservationNamespace(denops: Denops): Promise<number> {
+  if (reservationNamespace !== null) {
+    return reservationNamespace;
+  }
+  reservationNamespace = await denops.call(
+    "nvim_create_namespace",
+    "vinsert.session",
+  ) as number;
+  return reservationNamespace;
+}
+
+async function initializeSessionReservationMark(
+  denops: Denops,
+  session: SessionContext,
+): Promise<void> {
+  if (!session.insertAnchor) {
+    return;
+  }
+  const ns = await ensureReservationNamespace(denops);
+  session.reservationMarkId = await denops.call(
+    "nvim_buf_set_extmark",
+    session.insertAnchor.bufnr,
+    ns,
+    session.insertAnchor.row,
+    session.insertAnchor.col,
+    {
+      id: session.reservationMarkId ?? undefined,
+      right_gravity: true,
+      end_right_gravity: true,
+    },
+  ) as number;
+}
+
 async function ensureSessionInsertReservation(
   denops: Denops,
   session: SessionContext,
@@ -433,15 +473,59 @@ async function ensureSessionInsertReservation(
       bufnr: fallback.bufnr,
       row: fallback.startRow,
     };
+    await initializeSessionReservationMark(denops, session);
     return fallback;
   }
+  await initializeSessionReservationMark(denops, session);
+  const ns = await ensureReservationNamespace(denops);
+  const bufnr = session.insertAnchor.bufnr;
+  let position = await denops.call(
+    "nvim_buf_get_extmark_by_id",
+    bufnr,
+    ns,
+    session.reservationMarkId,
+    {},
+  ) as number[];
+  if (!position || position.length < 2) {
+    session.reservationMarkId = await denops.call(
+      "nvim_buf_set_extmark",
+      bufnr,
+      ns,
+      session.insertAnchor.row,
+      session.insertAnchor.col,
+      {
+        right_gravity: true,
+        end_right_gravity: true,
+      },
+    ) as number;
+    position = await denops.call(
+      "nvim_buf_get_extmark_by_id",
+      bufnr,
+      ns,
+      session.reservationMarkId,
+      {},
+    ) as number[];
+  }
+  const [markRow, markCol] = position;
   const sanitized = await sanitizeReservation(denops, {
-    bufnr: session.insertAnchor.bufnr,
-    startRow: session.insertAnchor.row,
-    startCol: session.insertAnchor.col,
-    endRow: session.insertAnchor.row,
-    endCol: session.insertAnchor.col,
+    bufnr,
+    startRow: markRow,
+    startCol: markCol,
+    endRow: markRow,
+    endCol: markCol,
   }, false);
+  session.reservationMarkId = await denops.call(
+    "nvim_buf_set_extmark",
+    bufnr,
+    ns,
+    sanitized.startRow,
+    sanitized.startCol,
+    {
+      id: session.reservationMarkId ?? undefined,
+      right_gravity: true,
+      end_right_gravity: true,
+    },
+  ) as number;
   session.insertAnchor = {
     bufnr: sanitized.bufnr,
     row: sanitized.startRow,
@@ -458,7 +542,17 @@ async function cleanupSession(
   denops: Denops,
   sessionId: SessionId,
 ): Promise<void> {
+  const session = sessions.get(sessionId);
   sessions.delete(sessionId);
+  if (session && session.reservationMarkId !== null && session.insertAnchor) {
+    const ns = await ensureReservationNamespace(denops);
+    await denops.call(
+      "nvim_buf_del_extmark",
+      session.insertAnchor.bufnr,
+      ns,
+      session.reservationMarkId,
+    ).catch(() => {});
+  }
   const nextActiveId = selectNextActiveSession(sessions, sessionId);
   if (nextActiveId) {
     await focusSession(denops, nextActiveId);

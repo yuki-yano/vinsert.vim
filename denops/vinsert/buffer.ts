@@ -75,10 +75,17 @@ export async function insertStream(
   await insertStream(denops, reservation, text, { append: true });
 }
 
-export async function finalizeUndo(denops: Denops): Promise<void> {
+export async function finalizeUndo(
+  denops: Denops,
+  bufnr: number,
+): Promise<void> {
+  const winnr = await denops.call("bufwinnr", bufnr) as number;
+  if (typeof winnr !== "number" || winnr <= 0) {
+    return;
+  }
   await helper.execute(
     denops,
-    "silent! call win_execute(winnr(), 'normal! \\<Esc>')",
+    `silent! call win_execute(${winnr}, 'normal! \\<Esc>')`,
   );
 }
 function splitLines(text: string): string[] {

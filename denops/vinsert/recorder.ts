@@ -59,7 +59,9 @@ export async function stopRecording(
   } catch (error) {
     await logWarn(
       denops,
-      `[vinsert] stopRecording: failed to signal ffmpeg (${formatError(error)})`,
+      `[vinsert] stopRecording: failed to signal ffmpeg (${
+        formatError(error)
+      })`,
     );
   }
   const status = await process.status;
@@ -161,7 +163,9 @@ async function sendQuitSignal(
   } catch (error) {
     await logWarn(
       denops,
-      `[vinsert] stopRecording: write via writer failed (${formatError(error)})`,
+      `[vinsert] stopRecording: write via writer failed (${
+        formatError(error)
+      })`,
     );
     try {
       await stdin.close();

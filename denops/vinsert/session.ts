@@ -17,6 +17,7 @@ export type SessionContext = {
   insertAnchor: InsertAnchor;
   indicatorAnchor: IndicatorAnchor;
   recorder: RecorderHandle | null;
+  reservationMarkId: number | null;
   sttController: AbortController | null;
   genController: AbortController | null;
   canceled: boolean;
@@ -40,6 +41,7 @@ export function createSessionContext(
     insertAnchor: null,
     indicatorAnchor: null,
     recorder: null,
+    reservationMarkId: null,
     sttController: null,
     genController: null,
     canceled: false,

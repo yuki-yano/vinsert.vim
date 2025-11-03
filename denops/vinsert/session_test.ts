@@ -1,3 +1,4 @@
+import { assert, assertEquals } from "./deps/assert.ts";
 import {
   createSessionContext,
   isLatestSession,
@@ -38,21 +39,14 @@ function stubConfig(): RuntimeConfig {
 
 Deno.test("createSessionContext initializes defaults", () => {
   const session = createSessionContext("test-id", "insert", stubConfig());
-  if (session.id !== "test-id") {
-    throw new Error("id should match the provided value");
-  }
-  if (session.mode !== "insert") {
-    throw new Error("mode should match the provided value");
-  }
-  if (session.phase !== "idle") {
-    throw new Error("phase should start as idle");
-  }
-  if (session.lastFinal !== "") {
-    throw new Error("lastFinal should start empty");
-  }
-  if (session.startedAt <= 0) {
-    throw new Error("startedAt should be positive timestamp");
-  }
+  assertEquals(session.id, "test-id");
+  assertEquals(session.mode, "insert");
+  assertEquals(session.phase, "idle");
+  assertEquals(session.lastFinal, "");
+  assert(
+    session.startedAt > 0,
+    "startedAt should be positive timestamp",
+  );
 });
 
 Deno.test("selectNextActiveSession picks the most recent session", () => {
@@ -65,16 +59,10 @@ Deno.test("selectNextActiveSession picks the most recent session", () => {
   sessions.set(second.id, second);
 
   const next = selectNextActiveSession(sessions, "first");
-  if (next !== "second") {
-    throw new Error("should pick the most recent session id");
-  }
+  assertEquals(next, "second");
 });
 
 Deno.test("isLatestSession checks active id against session id", () => {
-  if (!isLatestSession("abc", "abc")) {
-    throw new Error("session should be recognised as latest");
-  }
-  if (isLatestSession("abc", "def")) {
-    throw new Error("different session ids should not be treated as latest");
-  }
+  assert(isLatestSession("abc", "abc"));
+  assert(!isLatestSession("abc", "def"));
 });
