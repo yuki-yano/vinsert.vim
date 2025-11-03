@@ -20,7 +20,12 @@ import {
 } from "./stt.ts";
 import { streamGenerate } from "./llm.ts";
 import { appendScratch, prepareScratch, replaceScratch } from "./scratch.ts";
-import { setIndicatorAnchor, setPhase } from "./indicator.ts";
+import {
+  getIndicatorAnchor,
+  refreshIndicator,
+  setIndicatorAnchor,
+  setPhase,
+} from "./indicator.ts";
 import { yankToRegister } from "./yank.ts";
 import { emitCompletionEvent } from "./events.ts";
 import {
@@ -96,6 +101,18 @@ export function main(denops: Denops): void {
         active?.phase ?? "idle",
         active?.mode ?? "insert",
       );
+    },
+    async refresh_indicator(): Promise<void> {
+      const active = getActiveSession();
+      if (!active || !active.indicatorAnchor) {
+        return;
+      }
+      setIndicatorAnchor(active.indicatorAnchor);
+      await refreshIndicator(denops, active.config);
+      const updatedAnchor = getIndicatorAnchor();
+      if (updatedAnchor) {
+        active.indicatorAnchor = updatedAnchor;
+      }
     },
     async cancel(): Promise<void> {
       const target = getCancelableSession();

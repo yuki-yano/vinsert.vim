@@ -8,3 +8,8 @@ command! -nargs=? VinsertStart  call denops#notify('vinsert', 'start',  [<q-args
 command!          VinsertStop   call denops#notify('vinsert', 'stop',   [])
 command!          VinsertStatus call denops#notify('vinsert', 'status', [])
 command!          VinsertCancel call denops#notify('vinsert', 'cancel', [])
+
+augroup VinsertIndicatorRefresh
+  autocmd!
+  autocmd TextChanged,TextChangedI * call denops#notify('vinsert', 'refresh_indicator', [])
+augroup END
