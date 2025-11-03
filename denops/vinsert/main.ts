@@ -34,7 +34,7 @@ import {
   type StatusPhase,
   toIndicatorPhase,
 } from "./status.ts";
-import { isDebugEnabled, logError, logInfo, logWarn } from "./logger.ts";
+import { logError, logInfo, logWarn } from "./logger.ts";
 import {
   createSessionContext,
   generateSessionId,
@@ -140,8 +140,7 @@ async function beginRecording(denops: Denops, rawMode: unknown): Promise<void> {
     session.insertAnchor = anchor;
     session.indicatorAnchor = { bufnr: anchor.bufnr, row: anchor.row };
     await focusSession(denops, sessionId);
-    const debug = await isDebugEnabled(denops);
-    session.recorder = await startRecording(config, debug);
+    session.recorder = await startRecording(denops, config);
     session.lastFinal = "";
     session.reservation = null;
     session.scratchHandle = null;
@@ -169,14 +168,13 @@ async function finishRecording(
       `[vinsert] finishRecording: session=${sessionId} entering STT phase`,
     );
     await updateSessionPhase(denops, sessionId, "stt");
-    const debug = await isDebugEnabled(denops);
     if (!session.recorder) {
       throw new Error("Recorder handle is missing.");
     }
     const wav = await stopRecording(
+      denops,
       session.recorder,
       session.config.keepAudio,
-      debug,
     );
     session.recorder = null;
     await logInfo(
@@ -334,14 +332,13 @@ async function cancelRecording(
     await logWarn(denops, "[vinsert] Recording is not active.");
     return;
   }
-  const debug = await isDebugEnabled(denops);
   await logInfo(
     denops,
     `[vinsert] cancelRecording: aborting session=${sessionId}`,
   );
   try {
     if (session.recorder) {
-      await stopRecording(session.recorder, session.config.keepAudio, debug);
+      await stopRecording(denops, session.recorder, session.config.keepAudio);
     }
   } catch (error) {
     await logError(denops, "[vinsert] cancelRecording: stop failed", error);

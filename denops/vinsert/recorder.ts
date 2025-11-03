@@ -1,4 +1,6 @@
 import type { RuntimeConfig } from "./config.ts";
+import type { Denops } from "./deps/denops.ts";
+import { logInfo, logWarn } from "./logger.ts";
 
 export type RecorderHandle = {
   process: Deno.ChildProcess;
@@ -10,8 +12,8 @@ const encoder = new TextEncoder();
 const decoder = new TextDecoder();
 
 export async function startRecording(
+  denops: Denops,
   config: RuntimeConfig,
-  debug = false,
 ): Promise<RecorderHandle> {
   const filepath = await Deno.makeTempFile({ suffix: ".wav" });
   const baseArgs = config.ffmpegArgs.length > 0
@@ -34,37 +36,38 @@ export async function startRecording(
   });
   const process = command.spawn();
   const stderrPromise = process.stderr
-    ? drainStream(process.stderr, debug)
+    ? drainStream(denops, process.stderr)
     : undefined;
-  if (debug) {
-    console.log(
-      `[vinsert] ffmpeg start: ${config.ffmpegPath} ${args.join(" ")}`,
-    );
-  }
+  await logInfo(
+    denops,
+    `[vinsert] ffmpeg start: ${config.ffmpegPath} ${args.join(" ")}`,
+  );
   return { process, filepath, stderrPromise };
 }
 
 export async function stopRecording(
+  denops: Denops,
   handle: RecorderHandle | null,
   keepAudio: boolean,
-  debug = false,
 ): Promise<Uint8Array> {
   if (!handle) {
     throw new Error("Recorder is not active");
   }
   const { process, filepath, stderrPromise } = handle;
-  await sendQuitSignal(process, debug).catch((error) => {
-    if (debug) {
-      console.warn("[vinsert] stopRecording: failed to signal ffmpeg", error);
-    }
-  });
-  const status = await process.status;
-  const stderrText = await readStderr(stderrPromise, debug);
-  if (debug) {
-    console.log(
-      `[vinsert] stopRecording: ffmpeg exited with code ${status.code}`,
+  try {
+    await sendQuitSignal(denops, process);
+  } catch (error) {
+    await logWarn(
+      denops,
+      `[vinsert] stopRecording: failed to signal ffmpeg (${formatError(error)})`,
     );
   }
+  const status = await process.status;
+  const stderrText = await readStderr(denops, stderrPromise);
+  await logInfo(
+    denops,
+    `[vinsert] stopRecording: ffmpeg exited with code ${status.code}`,
+  );
   if (!status.success) {
     throw new Error(`ffmpeg exited with code ${status.code}: ${stderrText}`);
   }
@@ -102,8 +105,8 @@ function defaultInputArgs(): string[] {
 }
 
 async function drainStream(
+  denops: Denops,
   stream: ReadableStream<Uint8Array>,
-  debug: boolean,
 ): Promise<Uint8Array[]> {
   const reader = stream.getReader();
   const chunks: Uint8Array[] = [];
@@ -114,9 +117,10 @@ async function drainStream(
       if (value) chunks.push(value);
     }
   } catch (error) {
-    if (debug) {
-      console.warn("[vinsert] ffmpeg stderr read error", error);
-    }
+    await logWarn(
+      denops,
+      `[vinsert] ffmpeg stderr read error (${formatError(error)})`,
+    );
   } finally {
     reader.releaseLock();
   }
@@ -124,8 +128,8 @@ async function drainStream(
 }
 
 async function readStderr(
+  denops: Denops,
   reader?: Promise<Uint8Array[]>,
-  debug = false,
 ): Promise<string> {
   if (!reader) return "";
   try {
@@ -133,32 +137,32 @@ async function readStderr(
     if (chunks.length === 0) return "";
     return decoder.decode(concatenate(chunks));
   } catch (error) {
-    if (debug) {
-      console.warn("[vinsert] stderr decode error", error);
-    }
+    await logWarn(
+      denops,
+      `[vinsert] stderr decode error (${formatError(error)})`,
+    );
     return "";
   }
 }
 
 async function sendQuitSignal(
+  denops: Denops,
   process: Deno.ChildProcess,
-  debug: boolean,
 ): Promise<void> {
   const stdin = process.stdin;
   if (!stdin) {
     return;
   }
   try {
-    if (debug) {
-      console.log("[vinsert] stopRecording: sending 'q' to ffmpeg");
-    }
+    await logInfo(denops, "[vinsert] stopRecording: sending 'q' to ffmpeg");
     const writer = stdin.getWriter();
     await writer.write(encoder.encode("q\n"));
     await writer.close();
   } catch (error) {
-    if (debug) {
-      console.warn("[vinsert] stopRecording: write via writer failed", error);
-    }
+    await logWarn(
+      denops,
+      `[vinsert] stopRecording: write via writer failed (${formatError(error)})`,
+    );
     try {
       await stdin.close();
     } catch {
@@ -166,4 +170,11 @@ async function sendQuitSignal(
     }
     throw error;
   }
+}
+
+function formatError(error: unknown): string {
+  if (error instanceof Error) {
+    return error.message;
+  }
+  return String(error);
 }

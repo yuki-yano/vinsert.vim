@@ -18,9 +18,9 @@ export async function transcribeServer(
   try {
     return await transcribeSSE(wav, options);
   } catch (error) {
-    console.warn(
-      "[vinsert] SSE transcription failed, falling back to batch:",
-      error,
+    const detail = error instanceof Error ? error.message : String(error ?? "");
+    options.onStatus?.(
+      `[vinsert] STT: SSE transcription failed, falling back to batch (${detail})`,
     );
     return await transcribeBatch(wav, options);
   }
