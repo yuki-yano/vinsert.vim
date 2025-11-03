@@ -98,12 +98,12 @@ export function main(denops: Denops): void {
       );
     },
     async cancel(): Promise<void> {
-      const recording = getRecordingSession();
-      if (!recording) {
-        await logWarn(denops, "[vinsert] Recording is not active.");
+      const target = getCancelableSession();
+      if (!target) {
+        await logWarn(denops, "[vinsert] No session in progress.");
         return;
       }
-      await cancelRecording(denops, recording.id);
+      await cancelRecording(denops, target.id);
     },
   };
 }
@@ -193,19 +193,27 @@ async function finishRecording(
         replaceScratch(denops, current.scratchHandle, text).catch(() => {});
       }
     };
-    const transcript = await transcribeByMode(
-      denops,
-      session.config.sttStreamingMode,
-      wav,
-      {
-        apiKey,
-        config: session.config,
-        onPartial,
-        onStatus: async (message) => {
-          await logInfo(denops, message).catch(() => {});
+    session.sttController = new AbortController();
+    const sttSignal = session.sttController.signal;
+    let transcript = "";
+    try {
+      transcript = await transcribeByMode(
+        denops,
+        session.config.sttStreamingMode,
+        wav,
+        {
+          apiKey,
+          config: session.config,
+          onPartial,
+          onStatus: async (message) => {
+            await logInfo(denops, message).catch(() => {});
+          },
+          signal: sttSignal,
         },
-      },
-    );
+      );
+    } finally {
+      session.sttController = null;
+    }
     const current = sessions.get(sessionId);
     if (!current || current.canceled) {
       return;
@@ -228,23 +236,30 @@ async function finishRecording(
           logError(denops, "[vinsert] flush failed", error).catch(() => {});
         });
     };
-    await streamGenerate(transcript, {
-      apiKey,
-      config: session.config,
-      onDelta: (delta) => {
-        const currentSession = sessions.get(sessionId);
-        if (!currentSession || currentSession.canceled) {
-          return;
-        }
-        batch += delta;
-        currentSession.lastFinal += delta;
-        if (batch.length >= threshold) {
-          const content = batch;
-          batch = "";
-          flush(content);
-        }
-      },
-    });
+    session.genController = new AbortController();
+    const genSignal = session.genController.signal;
+    try {
+      await streamGenerate(transcript, {
+        apiKey,
+        config: session.config,
+        signal: genSignal,
+        onDelta: (delta) => {
+          const currentSession = sessions.get(sessionId);
+          if (!currentSession || currentSession.canceled) {
+            return;
+          }
+          batch += delta;
+          currentSession.lastFinal += delta;
+          if (batch.length >= threshold) {
+            const content = batch;
+            batch = "";
+            flush(content);
+          }
+        },
+      });
+    } finally {
+      session.genController = null;
+    }
     const latest = sessions.get(sessionId);
     if (!latest || latest.canceled) {
       return;
@@ -271,20 +286,24 @@ async function finishRecording(
     await updateSessionPhase(denops, sessionId, "idle");
     await cleanupSession(denops, sessionId);
   } catch (error) {
+    session.sttController = null;
+    session.genController = null;
+    if (session.canceled || isAbortError(error)) {
+      return;
+    }
     const context = sessions.get(sessionId);
     if (context) {
       await updateSessionPhase(denops, sessionId, "error");
     }
     await logError(denops, "[vinsert] finishRecording: error", error);
-    if (context) {
-      await emitCompletionEvent(
-        denops,
-        context.mode,
-        false,
-        context.lastFinal,
-        "",
-      );
-    }
+    const target = context ?? session;
+    await emitCompletionEvent(
+      denops,
+      target.mode,
+      false,
+      context?.lastFinal ?? session.lastFinal,
+      "",
+    );
     await cleanupSession(denops, sessionId);
   }
 }
@@ -310,7 +329,15 @@ async function cancelRecording(
   } catch (error) {
     await logError(denops, "[vinsert] cancelRecording: stop failed", error);
   } finally {
+    if (session.sttController) {
+      session.sttController.abort();
+    }
+    if (session.genController) {
+      session.genController.abort();
+    }
     session.recorder = null;
+    session.sttController = null;
+    session.genController = null;
     session.canceled = true;
     await updateSessionPhase(denops, sessionId, "idle");
     await emitCompletionEvent(denops, session.mode, false, "", "");
@@ -474,6 +501,33 @@ function getRecordingSession(): SessionContext | null {
   return null;
 }
 
+function getCancelableSession(): SessionContext | null {
+  const active = getActiveSession();
+  if (active && isCancelablePhase(active.phase)) {
+    return active;
+  }
+  for (const session of sessions.values()) {
+    if (isCancelablePhase(session.phase)) {
+      return session;
+    }
+  }
+  return null;
+}
+
+function isCancelablePhase(phase: StatusPhase): boolean {
+  return phase === "recording" || phase === "stt" || phase === "gen";
+}
+
+function isAbortError(error: unknown): boolean {
+  if (error instanceof DOMException && error.name === "AbortError") {
+    return true;
+  }
+  if (error instanceof Error && error.name === "AbortError") {
+    return true;
+  }
+  return false;
+}
+
 async function transcribeByMode(
   denops: Denops,
   mode: StreamingMode,
@@ -483,6 +537,7 @@ async function transcribeByMode(
     config: RuntimeConfig;
     onPartial: (text: string) => void;
     onStatus?: (message: string) => void;
+    signal?: AbortSignal;
   },
 ): Promise<string> {
   switch (mode) {
@@ -492,6 +547,7 @@ async function transcribeByMode(
         config: options.config,
         onPartial: options.onPartial,
         onStatus: options.onStatus,
+        signal: options.signal,
       });
     case "progressive":
       return await transcribeProgressive(wav, {
@@ -499,12 +555,14 @@ async function transcribeByMode(
         config: options.config,
         onPartial: options.onPartial,
         onStatus: options.onStatus,
+        signal: options.signal,
       });
     case "off":
       return await transcribeBatch(wav, {
         apiKey: options.apiKey,
         config: options.config,
         onStatus: options.onStatus,
+        signal: options.signal,
       });
     case "auto":
     default:
@@ -514,8 +572,12 @@ async function transcribeByMode(
           config: options.config,
           onPartial: options.onPartial,
           onStatus: options.onStatus,
+          signal: options.signal,
         });
       } catch (error) {
+        if (isAbortError(error)) {
+          throw error;
+        }
         const message = `[vinsert] STT: SSE failed (${
           error instanceof Error ? error.message : String(error)
         })`;
@@ -526,6 +588,7 @@ async function transcribeByMode(
           config: options.config,
           onPartial: options.onPartial,
           onStatus: options.onStatus,
+          signal: options.signal,
         });
       }
   }

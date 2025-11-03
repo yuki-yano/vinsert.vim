@@ -17,6 +17,8 @@ export type SessionContext = {
   insertAnchor: InsertAnchor;
   indicatorAnchor: IndicatorAnchor;
   recorder: RecorderHandle | null;
+  sttController: AbortController | null;
+  genController: AbortController | null;
   canceled: boolean;
   flushPromise: Promise<void>;
   startedAt: number;
@@ -38,6 +40,8 @@ export function createSessionContext(
     insertAnchor: null,
     indicatorAnchor: null,
     recorder: null,
+    sttController: null,
+    genController: null,
     canceled: false,
     flushPromise: Promise.resolve(),
     startedAt: Date.now(),

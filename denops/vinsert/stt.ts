@@ -6,6 +6,7 @@ export type TranscribeOptions = {
   config: RuntimeConfig;
   onPartial?: (text: string) => void;
   onStatus?: (message: string) => void;
+  signal?: AbortSignal;
 };
 
 const TRANSCRIBE_URL = "https://api.openai.com/v1/audio/transcriptions";
@@ -44,6 +45,7 @@ export async function transcribeBatch(
       Authorization: `Bearer ${options.apiKey}`,
     },
     body: buildFormData(wav, options),
+    signal: options.signal,
   });
   if (!response.ok) {
     const body = await response.text();
@@ -68,6 +70,7 @@ async function transcribeSSE(
       Accept: "text/event-stream",
     },
     body: buildFormData(wav, options),
+    signal: options.signal,
   });
   if (!response.ok) {
     const body = await response.text();
