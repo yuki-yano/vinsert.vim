@@ -88,9 +88,15 @@ export async function finalizeUndo(
     `silent! call win_execute(${winnr}, 'normal! \\<Esc>')`,
   );
 }
+const encoder = new TextEncoder();
+
 function splitLines(text: string): string[] {
   const normalized = text.replaceAll("\r\n", "\n").replaceAll("\r", "\n");
   return normalized.split("\n");
+}
+
+function byteLength(text: string): number {
+  return encoder.encode(text).length;
 }
 
 export function updateReservation(
@@ -101,18 +107,18 @@ export function updateReservation(
   if (append) {
     const [first, ...rest] = lines;
     if (rest.length === 0) {
-      reservation.endCol += first.length;
+      reservation.endCol += byteLength(first);
     } else {
       reservation.endRow += rest.length;
-      reservation.endCol = rest.at(-1)?.length ?? 0;
+      reservation.endCol = byteLength(rest.at(-1) ?? "");
     }
     return;
   }
   const lastLine = lines.at(-1) ?? "";
   reservation.endRow = reservation.startRow + (lines.length - 1);
   reservation.endCol = lines.length === 1
-    ? reservation.startCol + lastLine.length
-    : lastLine.length;
+    ? reservation.startCol + byteLength(lastLine)
+    : byteLength(lastLine);
 }
 
 export async function sanitizeReservation(
@@ -152,5 +158,5 @@ async function lineLength(
     row + 1,
     true,
   ) as string[];
-  return lines[0]?.length ?? 0;
+  return lines[0] ? byteLength(lines[0]) : 0;
 }
