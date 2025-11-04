@@ -109,7 +109,11 @@ export function main(denops: Denops): void {
     },
     async refresh_indicator(): Promise<void> {
       const active = getActiveSession();
-      if (!active || !active.indicatorAnchor) {
+      if (!active) {
+        return;
+      }
+      await syncSessionAnchors(denops, active);
+      if (!active.indicatorAnchor) {
         return;
       }
       setIndicatorAnchor(active.indicatorAnchor);
@@ -205,10 +209,20 @@ async function finishRecording(
         return;
       }
       if (current.mode === "insert" && current.reservation) {
-        insertStream(denops, current.reservation, text, { replace: true })
-          .catch(
-            () => {},
-          );
+        Promise.resolve()
+          .then(async () => {
+            await syncSessionAnchors(denops, current);
+            if (!current.reservation) {
+              return;
+            }
+            await insertStream(
+              denops,
+              current.reservation,
+              text,
+              { replace: true },
+            );
+          })
+          .catch(() => {});
       }
       if (current.mode === "scratch" && current.scratchHandle) {
         replaceScratch(denops, current.scratchHandle, text).catch(() => {});
@@ -376,6 +390,10 @@ async function handleSessionDelta(
   const session = sessions.get(sessionId);
   if (!session || session.canceled) return;
   if (session.mode === "insert" && session.reservation) {
+    await syncSessionAnchors(denops, session);
+    if (!session.reservation) {
+      return;
+    }
     await insertStream(denops, session.reservation, delta, { append: true });
   } else if (session.mode === "scratch" && session.scratchHandle) {
     await appendScratch(denops, session.scratchHandle, delta);
@@ -434,6 +452,62 @@ async function ensureReservationNamespace(denops: Denops): Promise<number> {
     "vinsert.session",
   ) as number;
   return reservationNamespace;
+}
+
+async function syncSessionAnchors(
+  denops: Denops,
+  session: SessionContext,
+): Promise<void> {
+  if (!session.insertAnchor || session.reservationMarkId === null) {
+    return;
+  }
+  const ns = await ensureReservationNamespace(denops);
+  try {
+    const position = await denops.call(
+      "nvim_buf_get_extmark_by_id",
+      session.insertAnchor.bufnr,
+      ns,
+      session.reservationMarkId,
+      {},
+    ) as number[];
+    if (!Array.isArray(position) || position.length < 2) {
+      return;
+    }
+    const [markRow, markCol] = position;
+    const previous = session.insertAnchor;
+    if (markRow === previous.row && markCol === previous.col) {
+      return;
+    }
+    const rowDiff = markRow - previous.row;
+    const colDiff = markCol - previous.col;
+    session.insertAnchor = {
+      bufnr: previous.bufnr,
+      row: markRow,
+      col: markCol,
+    };
+    session.indicatorAnchor = {
+      bufnr: previous.bufnr,
+      row: markRow,
+    };
+    if (session.reservation) {
+      const updatedReservation = {
+        ...session.reservation,
+        startRow: markRow,
+        startCol: markCol,
+        endRow: session.reservation.endRow + rowDiff,
+        endCol: session.reservation.endCol +
+          (rowDiff === 0 ? colDiff : 0),
+      };
+      const sanitized = await sanitizeReservation(
+        denops,
+        updatedReservation,
+        false,
+      );
+      Object.assign(session.reservation, sanitized);
+    }
+  } catch {
+    // ignore extmark lookup failures
+  }
 }
 
 async function initializeSessionReservationMark(
@@ -572,6 +646,7 @@ async function focusSession(
   activeSessionId = sessionId;
   const session = sessions.get(sessionId);
   if (!session) return;
+  await syncSessionAnchors(denops, session);
   if (session.indicatorAnchor) {
     setIndicatorAnchor(session.indicatorAnchor);
   }
@@ -586,6 +661,7 @@ async function updateSessionPhase(
   const session = sessions.get(sessionId);
   if (!session) return;
   session.phase = phase;
+  await syncSessionAnchors(denops, session);
   if (session.indicatorAnchor) {
     // keep anchor in sync when sanitized values shift
     setIndicatorAnchor(session.indicatorAnchor);

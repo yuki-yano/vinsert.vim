@@ -95,9 +95,26 @@ async function renderIndicator(
   config: RuntimeConfig,
 ): Promise<void> {
   const baseAnchor = await ensureAnchor(denops);
-  const row = await clampAnchorRow(denops, baseAnchor.bufnr, baseAnchor.row);
-  anchor = { bufnr: baseAnchor.bufnr, row };
   const ns = await ensureNamespace(denops);
+  let anchorRow = baseAnchor.row;
+  if (virtState && virtState.bufnr === baseAnchor.bufnr) {
+    try {
+      const position = await denops.call(
+        "nvim_buf_get_extmark_by_id",
+        virtState.bufnr,
+        ns,
+        virtState.markId,
+        {},
+      ) as number[];
+      if (Array.isArray(position) && position.length >= 2) {
+        anchorRow = position[0];
+      }
+    } catch {
+      // ignore lookup failures
+    }
+  }
+  const row = await clampAnchorRow(denops, baseAnchor.bufnr, anchorRow);
+  anchor = { bufnr: baseAnchor.bufnr, row };
   if (virtState && virtState.bufnr !== baseAnchor.bufnr) {
     await denops.call(
       "nvim_buf_del_extmark",
@@ -179,16 +196,34 @@ function startBlink(
   highlights: IndicatorHighlights,
 ): void {
   stopBlink();
+  let currentRow = row;
   blinkTimer = setInterval(async () => {
     blinkToggle = !blinkToggle;
     if (!virtState) return;
     const label = blinkToggle ? "● REC" : "○ REC";
+    if (virtState.bufnr === bufnr) {
+      try {
+        const position = await denops.call(
+          "nvim_buf_get_extmark_by_id",
+          bufnr,
+          ns,
+          virtState.markId,
+          {},
+        ) as number[];
+        if (Array.isArray(position) && position.length >= 2) {
+          currentRow = position[0];
+        }
+      } catch {
+        // ignore lookup failures
+      }
+    }
+    anchor = { bufnr, row: currentRow };
     try {
       await denops.call(
         "nvim_buf_set_extmark",
         bufnr,
         ns,
-        row,
+        currentRow,
         -1,
         {
           id: virtState.markId,
