@@ -1,8 +1,8 @@
 import { assertEquals } from "./deps/assert.ts";
 import {
+  type InsertReservation,
   reserveInsertRange,
   updateReservation,
-  type InsertReservation,
 } from "./buffer.ts";
 
 Deno.test({

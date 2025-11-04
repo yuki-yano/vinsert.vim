@@ -20,11 +20,19 @@ let virtState: { bufnr: number; markId: number } | null = null;
 let blinkTimer: number | null = null;
 let blinkToggle = false;
 let anchor: { bufnr: number; row: number } | null = null;
+let currentPhase: IndicatorPhase = "idle";
+let lastConfig: RuntimeConfig | null = null;
 
 export function setIndicatorAnchor(
-  value: { bufnr: number; row: number },
+  value: { bufnr: number; row: number } | null,
 ): void {
-  anchor = value;
+  anchor = value ? { bufnr: value.bufnr, row: value.row } : null;
+}
+
+export function getIndicatorAnchor():
+  | { bufnr: number; row: number }
+  | null {
+  return anchor ? { bufnr: anchor.bufnr, row: anchor.row } : null;
 }
 
 async function ensureNamespace(denops: Denops): Promise<number> {
@@ -41,7 +49,10 @@ export async function setPhase(
   phase: IndicatorPhase,
   config: RuntimeConfig,
 ): Promise<void> {
+  currentPhase = phase;
+  lastConfig = config;
   if (config.indicatorMode !== "virt") {
+    await removeIndicator(denops, true);
     if (phase === "error") {
       await helper.echoerr(
         denops,
@@ -50,44 +61,101 @@ export async function setPhase(
     }
     return;
   }
-  await removeIndicator(denops, phase === "idle");
   if (phase === "idle") {
-    stopBlink();
+    await removeIndicator(denops, true);
     return;
   }
-  if (!anchor) {
-    const bufnr = await fn.bufnr(denops, "%") as number;
-    const pos = await fn.getpos(denops, ".") as unknown[];
-    anchor = { bufnr, row: Math.max(Number(pos[1]) - 1, 0) };
+  await renderIndicator(denops, phase, config);
+}
+
+export async function refreshIndicator(
+  denops: Denops,
+  config?: RuntimeConfig,
+): Promise<void> {
+  if (currentPhase === "idle") {
+    return;
   }
-  const { bufnr, row } = anchor!;
+  const effectiveConfig = config ?? lastConfig;
+  if (!effectiveConfig || effectiveConfig.indicatorMode !== "virt") {
+    return;
+  }
+  lastConfig = effectiveConfig;
+  await renderIndicator(denops, currentPhase, effectiveConfig);
+}
+
+export async function clearIndicator(denops: Denops): Promise<void> {
+  currentPhase = "idle";
+  lastConfig = null;
+  await removeIndicator(denops, true);
+}
+
+async function renderIndicator(
+  denops: Denops,
+  phase: IndicatorPhase,
+  config: RuntimeConfig,
+): Promise<void> {
+  const baseAnchor = await ensureAnchor(denops);
+  const row = await clampAnchorRow(denops, baseAnchor.bufnr, baseAnchor.row);
+  anchor = { bufnr: baseAnchor.bufnr, row };
   const ns = await ensureNamespace(denops);
+  if (virtState && virtState.bufnr !== baseAnchor.bufnr) {
+    await denops.call(
+      "nvim_buf_del_extmark",
+      virtState.bufnr,
+      ns,
+      virtState.markId,
+    ).catch(() => {});
+    virtState = null;
+  }
   const virtText = buildVirtText(
     phase,
     VIRT_LABELS[phase],
     config.indicatorHighlights,
   );
+  const options: Record<string, unknown> = {
+    virt_text: virtText,
+    virt_text_pos: "eol",
+  };
+  if (virtState) {
+    options.id = virtState.markId;
+  }
   const markId = await denops.call(
     "nvim_buf_set_extmark",
-    bufnr,
+    baseAnchor.bufnr,
     ns,
     row,
     -1,
-    {
-      virt_text: virtText,
-      virt_text_pos: "eol",
-    },
+    options,
   ) as number;
-  virtState = { bufnr, markId };
+  virtState = { bufnr: baseAnchor.bufnr, markId };
   if (phase === "rec") {
-    startBlink(denops, bufnr, ns, row, config.indicatorHighlights);
+    startBlink(denops, baseAnchor.bufnr, ns, row, config.indicatorHighlights);
   } else {
     stopBlink();
   }
 }
 
-export async function clearIndicator(denops: Denops): Promise<void> {
-  await removeIndicator(denops, true);
+async function ensureAnchor(
+  denops: Denops,
+): Promise<{ bufnr: number; row: number }> {
+  if (anchor) {
+    return anchor;
+  }
+  const bufnr = await fn.bufnr(denops, "%") as number;
+  const pos = await fn.getpos(denops, ".") as unknown[];
+  const row = Math.max(Number(pos[1]) - 1, 0);
+  anchor = { bufnr, row };
+  return anchor;
+}
+
+async function clampAnchorRow(
+  denops: Denops,
+  bufnr: number,
+  row: number,
+): Promise<number> {
+  const lineCount = await denops.call("nvim_buf_line_count", bufnr) as number;
+  const maxRow = Math.max(lineCount - 1, 0);
+  return Math.max(0, Math.min(row, maxRow));
 }
 
 export function buildVirtText(
