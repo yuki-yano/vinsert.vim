@@ -444,17 +444,19 @@ async function initializeSessionReservationMark(
     return;
   }
   const ns = await ensureReservationNamespace(denops);
+  const options: Record<string, unknown> = {
+    right_gravity: true,
+  };
+  if (session.reservationMarkId !== null) {
+    options.id = session.reservationMarkId;
+  }
   session.reservationMarkId = await denops.call(
     "nvim_buf_set_extmark",
     session.insertAnchor.bufnr,
     ns,
     session.insertAnchor.row,
     session.insertAnchor.col,
-    {
-      id: session.reservationMarkId ?? undefined,
-      right_gravity: true,
-      end_right_gravity: true,
-    },
+    options,
   ) as number;
 }
 
@@ -495,7 +497,6 @@ async function ensureSessionInsertReservation(
       session.insertAnchor.col,
       {
         right_gravity: true,
-        end_right_gravity: true,
       },
     ) as number;
     position = await denops.call(
@@ -521,9 +522,10 @@ async function ensureSessionInsertReservation(
     sanitized.startRow,
     sanitized.startCol,
     {
-      id: session.reservationMarkId ?? undefined,
       right_gravity: true,
-      end_right_gravity: true,
+      ...(session.reservationMarkId !== null
+        ? { id: session.reservationMarkId }
+        : {}),
     },
   ) as number;
   session.insertAnchor = {
