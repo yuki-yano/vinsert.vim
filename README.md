@@ -40,6 +40,12 @@ vim.g.vinsert_ffmpeg_args = {} -- leave empty to use platform defaults
 vim.g.vinsert_language = "ja"
 vim.g.vinsert_bias_prompt = ""
 vim.g.vinsert_system_prompt = [[あなたは日本語の音声起こしアシスタントです。話者が発した語句だけをそのまま残し、余計な語尾や単語を加えずに句読点・改行だけを整えてください。]]
+vim.g.vinsert_stt_model = "gpt-4o-transcribe"
+vim.g.vinsert_text_request = {
+  model = "gpt-5-mini",
+  reasoning = { effort = "minimal" },
+  text = { verbosity = "low" },
+}
 vim.g.vinsert_text_stream_flush_ms = 50
 vim.g.vinsert_text_stream_batch_tokens = 20
 vim.g.vinsert_indicator = "virt" -- virt | statusline | cmdline | none
@@ -66,6 +72,30 @@ vim.g.vinsert_always_yank = false -- set true to always copy the final text into
 - `:VinsertStop`: abort recording if something goes wrong.
 - `:VinsertCancel`: stop recording immediately without running transcription or
   generation.
+
+### Model configuration
+
+Speech-to-text defaults to `gpt-4o-transcribe`. To switch to a different Whisper/4o variant:
+
+```lua
+vim.g.vinsert_stt_model = "gpt-4o-mini-transcribe"
+```
+
+Text generation runs through the Responses API with the defaults
+`model = "gpt-5-mini"`, `reasoning = { effort = "minimal" }`, and
+`text = { verbosity = "low" }`. Override them together via:
+
+```lua
+vim.g.vinsert_text_request = {
+  model = "gpt-5-mini",
+  reasoning = { effort = "medium" },
+  text = { verbosity = "balanced" },
+}
+```
+
+If you only need to swap the model name, the legacy
+`vim.g.vinsert_text_model = "gpt-5.1-mini"` still works and merges into the
+structured request.
 
 ### Audio capture setup
 

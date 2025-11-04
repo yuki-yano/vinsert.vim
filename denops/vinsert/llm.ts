@@ -14,6 +14,12 @@ export async function streamGenerate(
   prompt: string,
   options: GenerateOptions,
 ): Promise<void> {
+  const requestOptions = {
+    model: options.config.llmModel,
+    reasoning: { effort: "minimal" },
+    text: { verbosity: "low" },
+    ...options.config.llmRequestOptions,
+  };
   const response = await fetch(RESPONSES_URL, {
     method: "POST",
     headers: {
@@ -21,9 +27,7 @@ export async function streamGenerate(
       Authorization: `Bearer ${options.apiKey}`,
     },
     body: JSON.stringify({
-      model: options.config.llmModel,
-      reasoning: { effort: "low" },
-      text: { verbosity: "low" },
+      ...requestOptions,
       stream: true,
       input: [
         { role: "system", content: options.config.systemPrompt },

@@ -21,6 +21,7 @@ export type IndicatorHighlights = {
 export type RuntimeConfig = {
   sttModel: string;
   llmModel: string;
+  llmRequestOptions: Record<string, unknown>;
   language: string;
   biasPrompt: string;
   systemPrompt: string;
@@ -54,6 +55,7 @@ export const DEFAULT_INDICATOR_HIGHLIGHTS: IndicatorHighlights = {
 const DEFAULT_CONFIG: RuntimeConfig = {
   sttModel: "gpt-4o-transcribe",
   llmModel: "gpt-5-mini",
+  llmRequestOptions: {},
   language: "ja",
   biasPrompt: "",
   systemPrompt:
@@ -81,17 +83,25 @@ export async function loadConfig(denops: Denops): Promise<RuntimeConfig> {
     "vinsert_stt_streaming_mode",
   );
   const ffmpegArgs = await readArrayOption(denops, "vinsert_ffmpeg_args");
+  const sttModel = await readStringOption(
+    denops,
+    "vinsert_stt_model",
+    DEFAULT_CONFIG.sttModel,
+  );
+  const llmModel = await readStringOption(
+    denops,
+    "vinsert_text_model",
+    DEFAULT_CONFIG.llmModel,
+  );
+  const llmRequestOptions = await readRecordOption(
+    denops,
+    "vinsert_text_request",
+    DEFAULT_CONFIG.llmRequestOptions,
+  );
   const config: RuntimeConfig = {
-    sttModel: await readStringOption(
-      denops,
-      "vinsert_stt_model",
-      DEFAULT_CONFIG.sttModel,
-    ),
-    llmModel: await readStringOption(
-      denops,
-      "vinsert_text_model",
-      DEFAULT_CONFIG.llmModel,
-    ),
+    sttModel,
+    llmModel,
+    llmRequestOptions,
     language: await readStringOption(
       denops,
       "vinsert_language",
@@ -210,6 +220,43 @@ async function readBooleanOption(
     if (lowered === "false") return false;
   }
   return fallback;
+}
+
+async function readRecordOption(
+  denops: Denops,
+  name: string,
+  fallback: Record<string, unknown>,
+): Promise<Record<string, unknown>> {
+  const value = await variable.g.get(denops, name);
+  if (isRecord(value)) {
+    return clonePlainObject(value);
+  }
+  return clonePlainObject(fallback);
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function clonePlainObject(
+  value: Record<string, unknown>,
+): Record<string, unknown> {
+  const result: Record<string, unknown> = {};
+  for (const [key, entry] of Object.entries(value)) {
+    if (isRecord(entry)) {
+      result[key] = clonePlainObject(entry);
+    } else if (Array.isArray(entry)) {
+      result[key] = entry.map((item) => {
+        if (isRecord(item)) {
+          return clonePlainObject(item);
+        }
+        return item;
+      });
+    } else {
+      result[key] = entry;
+    }
+  }
+  return result;
 }
 
 async function readArrayOption(

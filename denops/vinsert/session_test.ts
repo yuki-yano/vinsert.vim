@@ -10,6 +10,7 @@ function stubConfig(): RuntimeConfig {
   return {
     sttModel: "",
     llmModel: "",
+    llmRequestOptions: {},
     language: "ja",
     biasPrompt: "",
     systemPrompt: "",
