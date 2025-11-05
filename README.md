@@ -97,6 +97,16 @@ If you only need to swap the model name, the legacy
 `vim.g.vinsert_text_model = "gpt-5.1-mini"` still works and merges into the
 structured request.
 
+If your OpenAI organisation is not verified for streaming yet, disable live
+updates and fall back to a single final response with:
+
+```lua
+vim.g.vinsert_text_stream = false
+```
+
+You can switch it back to `true` (the default) once streaming access becomes
+available.
+
 ### Audio capture setup
 
 `vinsert.vim` tries to pick sensible defaults for `ffmpeg` input devices:

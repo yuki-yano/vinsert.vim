@@ -21,6 +21,7 @@ export type IndicatorHighlights = {
 export type RuntimeConfig = {
   sttModel: string;
   llmModel: string;
+  llmStream: boolean;
   llmRequestOptions: Record<string, unknown>;
   language: string;
   biasPrompt: string;
@@ -63,6 +64,7 @@ const isHighlightOverrides = is.ObjectOf({
 const DEFAULT_CONFIG: RuntimeConfig = {
   sttModel: "gpt-4o-transcribe",
   llmModel: "gpt-5-mini",
+  llmStream: true,
   llmRequestOptions: {},
   language: "ja",
   biasPrompt: "",
@@ -109,6 +111,11 @@ export async function loadConfig(denops: Denops): Promise<RuntimeConfig> {
   const config: RuntimeConfig = {
     sttModel,
     llmModel,
+    llmStream: await readBooleanOption(
+      denops,
+      "vinsert_text_stream",
+      DEFAULT_CONFIG.llmStream,
+    ),
     llmRequestOptions,
     language: await readStringOption(
       denops,
