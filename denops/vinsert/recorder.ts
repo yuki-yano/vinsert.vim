@@ -1,6 +1,7 @@
 import type { RuntimeConfig } from "./config.ts";
 import type { Denops } from "./deps/denops.ts";
 import { logInfo, logWarn } from "./logger.ts";
+import { is } from "./deps/unknownutil.ts";
 
 export type RecorderHandle = {
   process: Deno.ChildProcess;
@@ -176,8 +177,10 @@ async function sendQuitSignal(
   }
 }
 
+const isError = is.InstanceOf(Error);
+
 function formatError(error: unknown): string {
-  if (error instanceof Error) {
+  if (isError(error)) {
     return error.message;
   }
   return String(error);

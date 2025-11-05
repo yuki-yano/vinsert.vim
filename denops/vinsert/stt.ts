@@ -1,5 +1,8 @@
 import type { RuntimeConfig } from "./config.ts";
 import { sanitizeText } from "./text.ts";
+import { as, ensure, is, type Predicate } from "./deps/unknownutil.ts";
+
+const isError = is.InstanceOf(Error);
 
 export type TranscribeOptions = {
   apiKey: string;
@@ -11,6 +14,18 @@ export type TranscribeOptions = {
 
 const TRANSCRIBE_URL = "https://api.openai.com/v1/audio/transcriptions";
 
+type TranscriptionResponse = { text: string };
+type TranscriptionChunk = { text?: string; partial?: string };
+
+const isTranscriptionResponse = is.ObjectOf({
+  text: is.String,
+}) satisfies Predicate<TranscriptionResponse>;
+
+const isTranscriptionChunk = is.ObjectOf({
+  text: as.Optional(is.String),
+  partial: as.Optional(is.String),
+}) satisfies Predicate<TranscriptionChunk>;
+
 export async function transcribeServer(
   wav: Uint8Array,
   options: TranscribeOptions,
@@ -18,7 +33,7 @@ export async function transcribeServer(
   try {
     return await transcribeSSE(wav, options);
   } catch (error) {
-    const detail = error instanceof Error ? error.message : String(error ?? "");
+    const detail = isError(error) ? error.message : String(error ?? "");
     options.onStatus?.(
       `[vinsert] STT: SSE transcription failed, falling back to batch (${detail})`,
     );
@@ -51,11 +66,12 @@ export async function transcribeBatch(
     const body = await response.text();
     throw new Error(`Transcription failed (${response.status}): ${body}`);
   }
-  const json = await response.json() as { text?: string };
-  if (!json.text) {
+  const json = ensure(await response.json(), isTranscriptionResponse);
+  const text = json.text;
+  if (text.length === 0) {
     throw new Error("Transcription response missing text field");
   }
-  return sanitizeText(json.text);
+  return sanitizeText(text);
 }
 
 async function transcribeSSE(
@@ -82,9 +98,10 @@ async function transcribeSSE(
     options.onStatus?.(
       "[vinsert] STT: SSE not available, falling back to batch",
     );
-    const json = await response.json() as { text?: string };
-    if (typeof json.text === "string" && json.text.length > 0) {
-      return json.text;
+    const json = ensure(await response.json(), isTranscriptionResponse);
+    const text = json.text;
+    if (text.length > 0) {
+      return text;
     }
     throw new Error("SSE transcription not available (non-streaming response)");
   }
@@ -110,14 +127,14 @@ async function transcribeSSE(
         break;
       }
       try {
-        const payload = JSON.parse(data) as {
-          text?: string;
-          partial?: string;
-        };
-        if (typeof payload.partial === "string") {
+        const payload = JSON.parse(data);
+        if (!isTranscriptionChunk(payload)) {
+          continue;
+        }
+        if (payload.partial !== undefined) {
           finalText = sanitizeText(payload.partial);
           options.onPartial?.(finalText);
-        } else if (typeof payload.text === "string") {
+        } else if (payload.text !== undefined) {
           finalText = sanitizeText(payload.text);
           options.onPartial?.(finalText);
         }

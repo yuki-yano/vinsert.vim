@@ -1,5 +1,5 @@
 import { type Denops, variable } from "./deps/denops.ts";
-import { isString } from "./deps/unknownutil.ts";
+import { as, is } from "./deps/unknownutil.ts";
 
 export type StreamingMode = "server" | "progressive" | "off" | "auto";
 
@@ -51,6 +51,14 @@ export const DEFAULT_INDICATOR_HIGHLIGHTS: IndicatorHighlights = {
   gen: "DiagnosticInfo",
   error: "DiagnosticError",
 };
+
+const isHighlightOverrides = is.ObjectOf({
+  idle: as.Optional(is.String),
+  rec: as.Optional(is.String),
+  stt: as.Optional(is.String),
+  gen: as.Optional(is.String),
+  error: as.Optional(is.String),
+});
 
 const DEFAULT_CONFIG: RuntimeConfig = {
   sttModel: "gpt-4o-transcribe",
@@ -181,7 +189,7 @@ async function readStringOption(
   fallback = "",
 ): Promise<string> {
   const value = await variable.g.get(denops, name);
-  if (isString(value) && value.length > 0) {
+  if (is.String(value) && value.length > 0) {
     return value;
   }
   return fallback;
@@ -193,10 +201,10 @@ async function readNumberOption(
   fallback: number,
 ): Promise<number> {
   const value = await variable.g.get(denops, name);
-  if (typeof value === "number" && Number.isFinite(value)) {
+  if (is.Number(value) && Number.isFinite(value)) {
     return value;
   }
-  if (isString(value)) {
+  if (is.String(value)) {
     const parsed = Number(value);
     if (!Number.isNaN(parsed)) {
       return parsed;
@@ -211,10 +219,10 @@ async function readBooleanOption(
   fallback: boolean,
 ): Promise<boolean> {
   const value = await variable.g.get(denops, name);
-  if (typeof value === "boolean") {
+  if (is.Boolean(value)) {
     return value;
   }
-  if (isString(value)) {
+  if (is.String(value)) {
     const lowered = value.toLowerCase();
     if (lowered === "true") return true;
     if (lowered === "false") return false;
@@ -228,14 +236,10 @@ async function readRecordOption(
   fallback: Record<string, unknown>,
 ): Promise<Record<string, unknown>> {
   const value = await variable.g.get(denops, name);
-  if (isRecord(value)) {
+  if (is.Record(value)) {
     return clonePlainObject(value);
   }
   return clonePlainObject(fallback);
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
 function clonePlainObject(
@@ -243,15 +247,12 @@ function clonePlainObject(
 ): Record<string, unknown> {
   const result: Record<string, unknown> = {};
   for (const [key, entry] of Object.entries(value)) {
-    if (isRecord(entry)) {
+    if (is.Record(entry)) {
       result[key] = clonePlainObject(entry);
-    } else if (Array.isArray(entry)) {
-      result[key] = entry.map((item) => {
-        if (isRecord(item)) {
-          return clonePlainObject(item);
-        }
-        return item;
-      });
+    } else if (is.Array(entry)) {
+      result[key] = entry.map((item) =>
+        is.Record(item) ? clonePlainObject(item) : item
+      );
     } else {
       result[key] = entry;
     }
@@ -264,10 +265,8 @@ async function readArrayOption(
   name: string,
 ): Promise<string[]> {
   const value = await variable.g.get(denops, name);
-  if (Array.isArray(value)) {
-    const safe = value.filter((item): item is string =>
-      typeof item === "string"
-    );
+  if (is.Array(value)) {
+    const safe = value.filter((item): item is string => is.String(item));
     return safe;
   }
   return [];
@@ -276,7 +275,7 @@ async function readArrayOption(
 export function normalizeIndicatorMode(
   value: unknown,
 ): "virt" | "statusline" | "cmdline" | "none" {
-  if (!isString(value)) {
+  if (!is.String(value)) {
     return DEFAULT_CONFIG.indicatorMode;
   }
   switch (value) {
@@ -292,12 +291,13 @@ export function normalizeIndicatorMode(
 
 export function normalizeHighlights(value: unknown): IndicatorHighlights {
   const result: IndicatorHighlights = { ...DEFAULT_INDICATOR_HIGHLIGHTS };
-  if (value && typeof value === "object") {
-    for (const key of ["idle", "rec", "stt", "gen", "error"] as const) {
-      const candidate = (value as Record<string, unknown>)[key];
-      if (isString(candidate) && candidate.length > 0) {
-        result[key] = candidate;
-      }
+  if (!isHighlightOverrides(value)) {
+    return result;
+  }
+  for (const key of ["idle", "rec", "stt", "gen", "error"] as const) {
+    const candidate = value[key];
+    if (candidate && candidate.length > 0) {
+      result[key] = candidate;
     }
   }
   return result;

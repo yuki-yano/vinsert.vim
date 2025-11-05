@@ -1,5 +1,6 @@
 import type { RuntimeConfig } from "./config.ts";
 import { sanitizeText } from "./text.ts";
+import { as, is, type Predicate } from "./deps/unknownutil.ts";
 
 const RESPONSES_URL = "https://api.openai.com/v1/responses";
 
@@ -9,6 +10,50 @@ export type GenerateOptions = {
   onDelta: (delta: string) => void;
   signal?: AbortSignal;
 };
+
+type ResponseError = { message?: string };
+type ResponseStreamChunk = {
+  type?: string;
+  delta?: unknown;
+  error?: ResponseError;
+};
+type StringDeltaChunk = { text?: string };
+type MessageItem = { text?: string; delta?: string };
+type MessageRecord = { content?: MessageItem[] };
+type NestedDelta = {
+  output_text_delta?: unknown;
+  text?: string;
+  message?: MessageRecord;
+};
+
+const isResponseError = is.ObjectOf({
+  message: as.Optional(is.String),
+}) satisfies Predicate<ResponseError>;
+
+const isResponseStreamChunk = is.ObjectOf({
+  type: as.Optional(is.String),
+  delta: as.Optional(is.Unknown),
+  error: as.Optional(isResponseError),
+}) satisfies Predicate<ResponseStreamChunk>;
+
+const isStringDeltaChunk = is.ObjectOf({
+  text: as.Optional(is.String),
+}) satisfies Predicate<StringDeltaChunk>;
+
+const isMessageItem = is.ObjectOf({
+  text: as.Optional(is.String),
+  delta: as.Optional(is.String),
+}) satisfies Predicate<MessageItem>;
+
+const isMessageRecord = is.ObjectOf({
+  content: as.Optional(is.ArrayOf(isMessageItem)),
+}) satisfies Predicate<MessageRecord>;
+
+const isNestedDelta = is.ObjectOf({
+  output_text_delta: as.Optional(is.Unknown),
+  text: as.Optional(is.String),
+  message: as.Optional(isMessageRecord),
+}) satisfies Predicate<NestedDelta>;
 
 export async function streamGenerate(
   prompt: string,
@@ -57,12 +102,15 @@ export async function streamGenerate(
         continue;
       }
       try {
-        const payload = JSON.parse(data) as ResponseStreamChunk;
-        if (payload.type === "response.error") {
-          const message = payload.error?.message ?? "Unknown streaming error";
+        const rawPayload = JSON.parse(data);
+        if (!isResponseStreamChunk(rawPayload)) {
+          continue;
+        }
+        if (rawPayload.type === "response.error") {
+          const message = rawPayload.error?.message ?? "Unknown streaming error";
           throw new ResponseStreamError(message);
         }
-        const delta = extractTextDelta(payload);
+        const delta = extractTextDelta(rawPayload);
         if (delta && delta.length > 0) {
           const cleaned = sanitizeDelta(delta);
           if (cleaned.length > 0) {
@@ -81,14 +129,7 @@ export async function streamGenerate(
 
 class ResponseStreamError extends Error {}
 
-type ResponseStreamChunk = {
-  type?: string;
-  delta?: unknown;
-  error?: { message?: string };
-};
-
 function extractTextDelta(payload: ResponseStreamChunk): string | undefined {
-  if (!payload || typeof payload !== "object") return undefined;
   switch (payload.type) {
     case "response.output_text.delta":
       return extractStringDelta(payload.delta);
@@ -100,25 +141,24 @@ function extractTextDelta(payload: ResponseStreamChunk): string | undefined {
 }
 
 function extractStringDelta(delta: unknown): string | undefined {
-  if (typeof delta === "string") return delta;
-  if (delta && typeof delta === "object") {
-    const text = (delta as { text?: unknown }).text;
-    if (typeof text === "string") return text;
+  if (is.String(delta)) return delta;
+  if (isStringDeltaChunk(delta)) {
+    const text = delta.text;
+    return text ?? undefined;
   }
   return undefined;
 }
 
 function extractNestedDelta(delta: unknown): string | undefined {
   if (!delta) return undefined;
-  if (typeof delta === "string") return delta;
-  if (typeof delta !== "object") return undefined;
+  if (is.String(delta)) return delta;
+  if (!isNestedDelta(delta)) return undefined;
 
-  const directText = extractString(
-    (delta as { output_text_delta?: unknown }).output_text_delta ??
-      (delta as { text?: unknown }).text,
-  );
-  const message = (delta as { message?: unknown }).message;
-  const messageText = extractMessageText(message);
+  const directSource = delta.output_text_delta ?? delta.text;
+  const directText = extractString(directSource);
+  const messageText = delta.message
+    ? extractMessageText(delta.message)
+    : undefined;
 
   if (directText && messageText) {
     return directText + messageText;
@@ -127,23 +167,19 @@ function extractNestedDelta(delta: unknown): string | undefined {
 }
 
 function extractMessageText(message: unknown): string | undefined {
-  if (!message || typeof message !== "object") return undefined;
-  const content = (message as { content?: unknown }).content;
-  if (!Array.isArray(content)) return undefined;
+  if (!isMessageRecord(message)) return undefined;
+  const content = message.content;
+  if (!content || content.length === 0) return undefined;
   let buffer = "";
   for (const item of content) {
-    if (!item || typeof item !== "object") continue;
-    const text = extractString(
-      (item as { text?: unknown }).text ??
-        (item as { delta?: unknown }).delta,
-    );
+    const text = item.text ?? item.delta;
     if (text) buffer += text;
   }
   return buffer.length > 0 ? buffer : undefined;
 }
 
 function extractString(value: unknown): string | undefined {
-  return typeof value === "string" ? value : undefined;
+  return is.String(value) ? value : undefined;
 }
 
 export function sanitizeDelta(delta: string): string {

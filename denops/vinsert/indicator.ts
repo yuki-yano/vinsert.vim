@@ -1,4 +1,5 @@
 import { type Denops, fn, helper } from "./deps/denops.ts";
+import { ensure, is } from "./deps/unknownutil.ts";
 import {
   DEFAULT_INDICATOR_HIGHLIGHTS,
   type IndicatorHighlights,
@@ -37,10 +38,14 @@ export function getIndicatorAnchor():
 
 async function ensureNamespace(denops: Denops): Promise<number> {
   if (namespaceId !== null) return namespaceId;
-  namespaceId = await denops.call(
-    "nvim_create_namespace",
-    "vinsert.indicator",
-  ) as number;
+  const id = ensure(
+    await denops.call(
+      "nvim_create_namespace",
+      "vinsert.indicator",
+    ),
+    is.Number,
+  );
+  namespaceId = id;
   return namespaceId;
 }
 
@@ -99,14 +104,17 @@ async function renderIndicator(
   let anchorRow = baseAnchor.row;
   if (virtState && virtState.bufnr === baseAnchor.bufnr) {
     try {
-      const position = await denops.call(
-        "nvim_buf_get_extmark_by_id",
-        virtState.bufnr,
-        ns,
-        virtState.markId,
-        {},
-      ) as number[];
-      if (Array.isArray(position) && position.length >= 2) {
+      const position = ensure(
+        await denops.call(
+          "nvim_buf_get_extmark_by_id",
+          virtState.bufnr,
+          ns,
+          virtState.markId,
+          {},
+        ),
+        is.ArrayOf(is.Number),
+      );
+      if (position.length >= 2) {
         anchorRow = position[0];
       }
     } catch {
@@ -136,14 +144,17 @@ async function renderIndicator(
   if (virtState) {
     options.id = virtState.markId;
   }
-  const markId = await denops.call(
-    "nvim_buf_set_extmark",
-    baseAnchor.bufnr,
-    ns,
-    row,
-    -1,
-    options,
-  ) as number;
+  const markId = ensure(
+    await denops.call(
+      "nvim_buf_set_extmark",
+      baseAnchor.bufnr,
+      ns,
+      row,
+      -1,
+      options,
+    ),
+    is.Number,
+  );
   virtState = { bufnr: baseAnchor.bufnr, markId };
   if (phase === "rec") {
     startBlink(denops, baseAnchor.bufnr, ns, row, config.indicatorHighlights);
@@ -158,9 +169,9 @@ async function ensureAnchor(
   if (anchor) {
     return anchor;
   }
-  const bufnr = await fn.bufnr(denops, "%") as number;
-  const pos = await fn.getpos(denops, ".") as unknown[];
-  const row = Math.max(Number(pos[1]) - 1, 0);
+  const bufnr = ensure(await fn.bufnr(denops, "%"), is.Number);
+  const pos = ensure(await fn.getpos(denops, "."), is.ArrayOf(is.Number));
+  const row = Math.max((pos[1] ?? 1) - 1, 0);
   anchor = { bufnr, row };
   return anchor;
 }
@@ -170,7 +181,10 @@ async function clampAnchorRow(
   bufnr: number,
   row: number,
 ): Promise<number> {
-  const lineCount = await denops.call("nvim_buf_line_count", bufnr) as number;
+  const lineCount = ensure(
+    await denops.call("nvim_buf_line_count", bufnr),
+    is.Number,
+  );
   const maxRow = Math.max(lineCount - 1, 0);
   return Math.max(0, Math.min(row, maxRow));
 }
@@ -203,14 +217,17 @@ function startBlink(
     const label = blinkToggle ? "● REC" : "○ REC";
     if (virtState.bufnr === bufnr) {
       try {
-        const position = await denops.call(
-          "nvim_buf_get_extmark_by_id",
-          bufnr,
-          ns,
-          virtState.markId,
-          {},
-        ) as number[];
-        if (Array.isArray(position) && position.length >= 2) {
+        const position = ensure(
+          await denops.call(
+            "nvim_buf_get_extmark_by_id",
+            bufnr,
+            ns,
+            virtState.markId,
+            {},
+          ),
+          is.ArrayOf(is.Number),
+        );
+        if (position.length >= 2) {
           currentRow = position[0];
         }
       } catch {

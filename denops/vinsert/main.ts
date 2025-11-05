@@ -1,5 +1,5 @@
 import { type Denops, fn, helper, variable } from "./deps/denops.ts";
-import { isString } from "./deps/unknownutil.ts";
+import { ensure, is } from "./deps/unknownutil.ts";
 import {
   loadConfig,
   type RuntimeConfig,
@@ -53,6 +53,9 @@ let reservationNamespace: number | null = null;
 const sessions = new Map<SessionId, SessionContext>();
 let activeSessionId: SessionId | null = null;
 type AnchorPosition = { bufnr: number; row: number; col: number };
+
+const isDomException = is.InstanceOf(DOMException);
+const isError = is.InstanceOf(Error);
 
 export function main(denops: Denops): void {
   denops.dispatcher = {
@@ -401,7 +404,7 @@ async function handleSessionDelta(
 }
 
 function toMode(value: unknown): StatusMode {
-  if (!isString(value) || value.length === 0) {
+  if (!is.String(value) || value.length === 0) {
     return "insert";
   }
   const lowered = value.toLowerCase();
@@ -416,7 +419,7 @@ async function resolveApiKey(denops: Denops): Promise<string> {
     return envKey;
   }
   const vimKey = await variable.g.get(denops, "vinsert_openai_api_key");
-  if (isString(vimKey) && vimKey.length > 0) {
+  if (is.String(vimKey) && vimKey.length > 0) {
     return vimKey;
   }
   throw new Error(
@@ -425,10 +428,10 @@ async function resolveApiKey(denops: Denops): Promise<string> {
 }
 
 async function createInsertAnchor(denops: Denops): Promise<AnchorPosition> {
-  const bufnr = await fn.bufnr(denops, "%") as number;
-  const pos = await fn.getpos(denops, ".") as unknown[];
-  const startRow = Math.max(Number(pos[1]) - 1, 0);
-  const startCol = Math.max(Number(pos[2]) - 1, 0);
+  const bufnr = ensure(await fn.bufnr(denops, "%"), is.Number);
+  const pos = ensure(await fn.getpos(denops, "."), is.ArrayOf(is.Number));
+  const startRow = Math.max((pos[1] ?? 1) - 1, 0);
+  const startCol = Math.max((pos[2] ?? 1) - 1, 0);
   const sanitized = await sanitizeReservation(denops, {
     bufnr,
     startRow,
@@ -447,10 +450,13 @@ async function ensureReservationNamespace(denops: Denops): Promise<number> {
   if (reservationNamespace !== null) {
     return reservationNamespace;
   }
-  reservationNamespace = await denops.call(
-    "nvim_create_namespace",
-    "vinsert.session",
-  ) as number;
+  reservationNamespace = ensure(
+    await denops.call(
+      "nvim_create_namespace",
+      "vinsert.session",
+    ),
+    is.Number,
+  );
   return reservationNamespace;
 }
 
@@ -463,14 +469,17 @@ async function syncSessionAnchors(
   }
   const ns = await ensureReservationNamespace(denops);
   try {
-    const position = await denops.call(
-      "nvim_buf_get_extmark_by_id",
-      session.insertAnchor.bufnr,
-      ns,
-      session.reservationMarkId,
-      {},
-    ) as number[];
-    if (!Array.isArray(position) || position.length < 2) {
+    const position = ensure(
+      await denops.call(
+        "nvim_buf_get_extmark_by_id",
+        session.insertAnchor.bufnr,
+        ns,
+        session.reservationMarkId,
+        {},
+      ),
+      is.ArrayOf(is.Number),
+    );
+    if (position.length < 2) {
       return;
     }
     const [markRow, markCol] = position;
@@ -524,14 +533,17 @@ async function initializeSessionReservationMark(
   if (session.reservationMarkId !== null) {
     options.id = session.reservationMarkId;
   }
-  session.reservationMarkId = await denops.call(
-    "nvim_buf_set_extmark",
-    session.insertAnchor.bufnr,
-    ns,
-    session.insertAnchor.row,
-    session.insertAnchor.col,
-    options,
-  ) as number;
+  session.reservationMarkId = ensure(
+    await denops.call(
+      "nvim_buf_set_extmark",
+      session.insertAnchor.bufnr,
+      ns,
+      session.insertAnchor.row,
+      session.insertAnchor.col,
+      options,
+    ),
+    is.Number,
+  );
 }
 
 async function ensureSessionInsertReservation(
@@ -555,31 +567,40 @@ async function ensureSessionInsertReservation(
   await initializeSessionReservationMark(denops, session);
   const ns = await ensureReservationNamespace(denops);
   const bufnr = session.insertAnchor.bufnr;
-  let position = await denops.call(
+  const isNumberArray = is.ArrayOf(is.Number);
+  let rawPosition = await denops.call(
     "nvim_buf_get_extmark_by_id",
     bufnr,
     ns,
     session.reservationMarkId,
     {},
-  ) as number[];
-  if (!position || position.length < 2) {
-    session.reservationMarkId = await denops.call(
-      "nvim_buf_set_extmark",
-      bufnr,
-      ns,
-      session.insertAnchor.row,
-      session.insertAnchor.col,
-      {
-        right_gravity: true,
-      },
-    ) as number;
-    position = await denops.call(
+  );
+  let position = isNumberArray(rawPosition) ? rawPosition : [];
+  if (position.length < 2) {
+    session.reservationMarkId = ensure(
+      await denops.call(
+        "nvim_buf_set_extmark",
+        bufnr,
+        ns,
+        session.insertAnchor.row,
+        session.insertAnchor.col,
+        {
+          right_gravity: true,
+        },
+      ),
+      is.Number,
+    );
+    rawPosition = await denops.call(
       "nvim_buf_get_extmark_by_id",
       bufnr,
       ns,
       session.reservationMarkId,
       {},
-    ) as number[];
+    );
+    position = isNumberArray(rawPosition) ? rawPosition : [];
+  }
+  if (position.length < 2) {
+    position = [session.insertAnchor.row, session.insertAnchor.col];
   }
   const [markRow, markCol] = position;
   const sanitized = await sanitizeReservation(denops, {
@@ -589,19 +610,22 @@ async function ensureSessionInsertReservation(
     endRow: markRow,
     endCol: markCol,
   }, false);
-  session.reservationMarkId = await denops.call(
-    "nvim_buf_set_extmark",
-    bufnr,
-    ns,
-    sanitized.startRow,
-    sanitized.startCol,
-    {
-      right_gravity: true,
-      ...(session.reservationMarkId !== null
-        ? { id: session.reservationMarkId }
-        : {}),
-    },
-  ) as number;
+  session.reservationMarkId = ensure(
+    await denops.call(
+      "nvim_buf_set_extmark",
+      bufnr,
+      ns,
+      sanitized.startRow,
+      sanitized.startCol,
+      {
+        right_gravity: true,
+        ...(session.reservationMarkId !== null
+          ? { id: session.reservationMarkId }
+          : {}),
+      },
+    ),
+    is.Number,
+  );
   session.insertAnchor = {
     bufnr: sanitized.bufnr,
     row: sanitized.startRow,
@@ -705,10 +729,10 @@ function isCancelablePhase(phase: StatusPhase): boolean {
 }
 
 function isAbortError(error: unknown): boolean {
-  if (error instanceof DOMException && error.name === "AbortError") {
+  if (isDomException(error) && error.name === "AbortError") {
     return true;
   }
-  if (error instanceof Error && error.name === "AbortError") {
+  if (isError(error) && error.name === "AbortError") {
     return true;
   }
   return false;
@@ -765,7 +789,7 @@ async function transcribeByMode(
           throw error;
         }
         const message = `[vinsert] STT: SSE failed (${
-          error instanceof Error ? error.message : String(error)
+          isError(error) ? error.message : String(error)
         })`;
         options.onStatus?.(message);
         await logError(denops, message, error);

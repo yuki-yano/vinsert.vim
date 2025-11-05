@@ -1,4 +1,5 @@
 import { type Denops, fn, helper } from "./deps/denops.ts";
+import { ensure, is } from "./deps/unknownutil.ts";
 
 export type InsertReservation = {
   bufnr: number;
@@ -16,10 +17,10 @@ type InsertStreamOptions = {
 export async function reserveInsertRange(
   denops: Denops,
 ): Promise<InsertReservation> {
-  const bufnr = await fn.bufnr(denops, "%") as number;
-  const pos = await fn.getpos(denops, ".") as unknown[];
-  const startRow = Number(pos[1]) - 1;
-  const startCol = Math.max(Number(pos[2]) - 1, 0);
+  const bufnr = ensure(await fn.bufnr(denops, "%"), is.Number);
+  const pos = ensure(await fn.getpos(denops, "."), is.ArrayOf(is.Number));
+  const startRow = Math.max((pos[1] ?? 1) - 1, 0);
+  const startCol = Math.max((pos[2] ?? 1) - 1, 0);
   return {
     bufnr,
     startRow,
@@ -79,7 +80,7 @@ export async function finalizeUndo(
   denops: Denops,
   bufnr: number,
 ): Promise<void> {
-  const winnr = await denops.call("bufwinnr", bufnr) as number;
+  const winnr = ensure(await denops.call("bufwinnr", bufnr), is.Number);
   if (typeof winnr !== "number" || winnr <= 0) {
     return;
   }
@@ -127,10 +128,13 @@ export async function sanitizeReservation(
   append: boolean,
 ): Promise<InsertReservation> {
   const copy: InsertReservation = { ...reservation };
-  const lineCount = await denops.call(
-    "nvim_buf_line_count",
-    reservation.bufnr,
-  ) as number;
+  const lineCount = ensure(
+    await denops.call(
+      "nvim_buf_line_count",
+      reservation.bufnr,
+    ),
+    is.Number,
+  );
   const maxRow = Math.max(lineCount - 1, 0);
   const clampRow = (row: number) => Math.min(Math.max(row, 0), maxRow);
   copy.startRow = clampRow(copy.startRow);
@@ -151,12 +155,15 @@ async function lineLength(
   bufnr: number,
   row: number,
 ): Promise<number> {
-  const lines = await denops.call(
-    "nvim_buf_get_lines",
-    bufnr,
-    row,
-    row + 1,
-    true,
-  ) as string[];
+  const lines = ensure(
+    await denops.call(
+      "nvim_buf_get_lines",
+      bufnr,
+      row,
+      row + 1,
+      true,
+    ),
+    is.ArrayOf(is.String),
+  );
   return lines[0] ? byteLength(lines[0]) : 0;
 }

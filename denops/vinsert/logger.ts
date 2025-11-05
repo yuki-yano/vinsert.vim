@@ -1,4 +1,7 @@
 import { type Denops, helper, variable } from "./deps/denops.ts";
+import { is } from "./deps/unknownutil.ts";
+
+const isError = is.InstanceOf(Error);
 
 export async function isDebugEnabled(denops: Denops): Promise<boolean> {
   const flag = await variable.g.get(denops, "vinsert_debug");
@@ -33,7 +36,7 @@ export async function logError(
 ): Promise<void> {
   if (await isDebugEnabled(denops)) {
     console.error(message, error);
-    const detail = error instanceof Error ? error.message : String(error ?? "");
+    const detail = isError(error) ? error.message : String(error ?? "");
     await helper.echoerr(denops, `${message}: ${detail}`).catch(() => {});
   } else {
     await helper.echoerr(denops, message).catch(() => {});
