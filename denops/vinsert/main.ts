@@ -1,4 +1,4 @@
-import { type Denops, fn, helper, variable } from "./deps/denops.ts";
+import { type Denops, fn, helper, nvimFn, variable } from "./deps/denops.ts";
 import { ensure, is } from "./deps/unknownutil.ts";
 import {
   loadConfig,
@@ -451,10 +451,7 @@ async function ensureReservationNamespace(denops: Denops): Promise<number> {
     return reservationNamespace;
   }
   reservationNamespace = ensure(
-    await denops.call(
-      "nvim_create_namespace",
-      "vinsert.session",
-    ),
+    await nvimFn.nvim_create_namespace(denops, "vinsert.session"),
     is.Number,
   );
   return reservationNamespace;
@@ -470,8 +467,8 @@ async function syncSessionAnchors(
   const ns = await ensureReservationNamespace(denops);
   try {
     const position = ensure(
-      await denops.call(
-        "nvim_buf_get_extmark_by_id",
+      await nvimFn.nvim_buf_get_extmark_by_id(
+        denops,
         session.insertAnchor.bufnr,
         ns,
         session.reservationMarkId,
@@ -534,8 +531,8 @@ async function initializeSessionReservationMark(
     options.id = session.reservationMarkId;
   }
   session.reservationMarkId = ensure(
-    await denops.call(
-      "nvim_buf_set_extmark",
+    await nvimFn.nvim_buf_set_extmark(
+      denops,
       session.insertAnchor.bufnr,
       ns,
       session.insertAnchor.row,
@@ -568,8 +565,8 @@ async function ensureSessionInsertReservation(
   const ns = await ensureReservationNamespace(denops);
   const bufnr = session.insertAnchor.bufnr;
   const isNumberArray = is.ArrayOf(is.Number);
-  let rawPosition = await denops.call(
-    "nvim_buf_get_extmark_by_id",
+  let rawPosition = await nvimFn.nvim_buf_get_extmark_by_id(
+    denops,
     bufnr,
     ns,
     session.reservationMarkId,
@@ -578,8 +575,8 @@ async function ensureSessionInsertReservation(
   let position = isNumberArray(rawPosition) ? rawPosition : [];
   if (position.length < 2) {
     session.reservationMarkId = ensure(
-      await denops.call(
-        "nvim_buf_set_extmark",
+      await nvimFn.nvim_buf_set_extmark(
+        denops,
         bufnr,
         ns,
         session.insertAnchor.row,
@@ -590,8 +587,8 @@ async function ensureSessionInsertReservation(
       ),
       is.Number,
     );
-    rawPosition = await denops.call(
-      "nvim_buf_get_extmark_by_id",
+    rawPosition = await nvimFn.nvim_buf_get_extmark_by_id(
+      denops,
       bufnr,
       ns,
       session.reservationMarkId,
@@ -611,8 +608,8 @@ async function ensureSessionInsertReservation(
     endCol: markCol,
   }, false);
   session.reservationMarkId = ensure(
-    await denops.call(
-      "nvim_buf_set_extmark",
+    await nvimFn.nvim_buf_set_extmark(
+      denops,
       bufnr,
       ns,
       sanitized.startRow,
@@ -646,8 +643,8 @@ async function cleanupSession(
   sessions.delete(sessionId);
   if (session && session.reservationMarkId !== null && session.insertAnchor) {
     const ns = await ensureReservationNamespace(denops);
-    await denops.call(
-      "nvim_buf_del_extmark",
+    await nvimFn.nvim_buf_del_extmark(
+      denops,
       session.insertAnchor.bufnr,
       ns,
       session.reservationMarkId,

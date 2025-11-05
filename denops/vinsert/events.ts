@@ -1,4 +1,4 @@
-import type { Denops } from "./deps/denops.ts";
+import { type Denops, helper, variable } from "./deps/denops.ts";
 
 export async function emitCompletionEvent(
   denops: Denops,
@@ -7,15 +7,11 @@ export async function emitCompletionEvent(
   transcript: string,
   finalText: string,
 ): Promise<void> {
-  await denops.call("nvim_set_var", "vinsert_last_completion", {
+  await variable.g.set(denops, "vinsert_last_completion", {
     mode,
     success,
     transcript,
     final: finalText,
   });
-  await denops.call(
-    "nvim_exec2",
-    "doautocmd <nomodeline> User VinsertComplete",
-    { output: false },
-  );
+  await helper.execute(denops, "doautocmd <nomodeline> User VinsertComplete");
 }

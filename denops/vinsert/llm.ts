@@ -139,7 +139,8 @@ export async function streamGenerate(
           continue;
         }
         if (rawPayload.type === "response.error") {
-          const message = rawPayload.error?.message ?? "Unknown streaming error";
+          const message = rawPayload.error?.message ??
+            "Unknown streaming error";
           throw new ResponseStreamError(message);
         }
         const delta = extractTextDelta(rawPayload);

@@ -1,4 +1,4 @@
-import { type Denops, fn, helper } from "./deps/denops.ts";
+import { type Denops, fn, helper, nvimFn } from "./deps/denops.ts";
 import { ensure, is } from "./deps/unknownutil.ts";
 
 export type InsertReservation = {
@@ -43,8 +43,8 @@ export async function insertStream(
       denops,
       `silent! undojoin | silent!`,
     );
-    await denops.call(
-      "nvim_buf_set_text",
+    await nvimFn.nvim_buf_set_text(
+      denops,
       sanitized.bufnr,
       sanitized.startRow,
       sanitized.startCol,
@@ -59,8 +59,8 @@ export async function insertStream(
   if (options.append) {
     const sanitized = await sanitizeReservation(denops, reservation, true);
     await helper.execute(denops, `silent! undojoin | silent!`);
-    await denops.call(
-      "nvim_buf_set_text",
+    await nvimFn.nvim_buf_set_text(
+      denops,
       sanitized.bufnr,
       sanitized.endRow,
       sanitized.endCol,
@@ -80,7 +80,7 @@ export async function finalizeUndo(
   denops: Denops,
   bufnr: number,
 ): Promise<void> {
-  const winnr = ensure(await denops.call("bufwinnr", bufnr), is.Number);
+  const winnr = ensure(await fn.bufwinnr(denops, bufnr), is.Number);
   if (typeof winnr !== "number" || winnr <= 0) {
     return;
   }
@@ -129,8 +129,8 @@ export async function sanitizeReservation(
 ): Promise<InsertReservation> {
   const copy: InsertReservation = { ...reservation };
   const lineCount = ensure(
-    await denops.call(
-      "nvim_buf_line_count",
+    await nvimFn.nvim_buf_line_count(
+      denops,
       reservation.bufnr,
     ),
     is.Number,
@@ -156,8 +156,8 @@ async function lineLength(
   row: number,
 ): Promise<number> {
   const lines = ensure(
-    await denops.call(
-      "nvim_buf_get_lines",
+    await nvimFn.nvim_buf_get_lines(
+      denops,
       bufnr,
       row,
       row + 1,
