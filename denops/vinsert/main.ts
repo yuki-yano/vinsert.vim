@@ -120,15 +120,6 @@ function restoreSessionStateFromCapture(
     : null;
 }
 
-async function clearReservationForRetry(
-  denops: Denops,
-  reservation: InsertReservation,
-): Promise<InsertReservation> {
-  const cleared = cloneReservation(reservation);
-  await insertStream(denops, cleared, "", { replace: true });
-  return cleared;
-}
-
 export function main(denops: Denops): void {
   denops.dispatcher = {
     async toggle(mode?: unknown): Promise<void> {
@@ -229,26 +220,20 @@ export function main(denops: Denops): void {
         cloneRuntimeConfig(capture.session.config),
       );
       sessions.set(sessionId, session);
-      restoreSessionStateFromCapture(session, capture);
+      if (session.mode === "insert") {
+        const anchor = await createInsertAnchor(denops);
+        session.insertAnchor = anchor;
+        session.indicatorAnchor = {
+          bufnr: anchor.bufnr,
+          row: anchor.row,
+        };
+        session.reservation = null;
+        session.reservationMarkId = null;
+      } else {
+        restoreSessionStateFromCapture(session, capture);
+      }
       session.resolvedText = "";
       session.scratchHandle = null;
-      if (session.mode === "insert" && session.reservation) {
-        const reservation = await clearReservationForRetry(
-          denops,
-          session.reservation,
-        );
-        session.reservation = reservation;
-        session.insertAnchor = {
-          bufnr: reservation.bufnr,
-          row: reservation.startRow,
-          col: reservation.startCol,
-        };
-        session.indicatorAnchor = {
-          bufnr: reservation.bufnr,
-          row: reservation.startRow,
-        };
-        session.reservationMarkId = null;
-      }
       try {
         await focusSession(denops, sessionId);
       } catch {
