@@ -1,4 +1,4 @@
-import { type Denops, helper } from "./deps/denops.ts";
+import { buffer, type Denops, helper, nvimFn, option } from "./deps/denops.ts";
 import { ensure, is } from "./deps/unknownutil.ts";
 import type { RuntimeConfig } from "./config.ts";
 
@@ -14,24 +14,19 @@ export async function prepareScratch(
   const command = buildSplitCommand(config.scratch.split, config.scratch.size);
   await helper.execute(denops, command);
   const bufnr = ensure(
-    await denops.call("nvim_create_buf", false, true),
+    await nvimFn.nvim_create_buf(denops, false, true),
     is.Number,
   );
   const winid = ensure(
-    await denops.call("nvim_get_current_win"),
+    await nvimFn.nvim_get_current_win(denops),
     is.Number,
   );
-  await denops.call("nvim_win_set_buf", winid, bufnr);
-  await denops.call("nvim_buf_set_option", bufnr, "buftype", "nofile");
-  await denops.call("nvim_buf_set_option", bufnr, "bufhidden", "wipe");
-  await denops.call("nvim_buf_set_option", bufnr, "swapfile", false);
-  await denops.call("nvim_buf_set_option", bufnr, "modifiable", true);
-  await denops.call(
-    "nvim_buf_set_option",
-    bufnr,
-    "filetype",
-    config.scratch.filetype,
-  );
+  await nvimFn.nvim_win_set_buf(denops, winid, bufnr);
+  await option.buftype.setBuffer(denops, bufnr, "nofile");
+  await option.bufhidden.setBuffer(denops, bufnr, "wipe");
+  await option.swapfile.setBuffer(denops, bufnr, false);
+  await option.modifiable.setBuffer(denops, bufnr, true);
+  await option.filetype.setBuffer(denops, bufnr, config.scratch.filetype);
   if (!config.scratch.focus) {
     await helper.execute(denops, "wincmd p");
   }
@@ -44,7 +39,7 @@ export async function replaceScratch(
   text: string,
 ): Promise<void> {
   const lines = splitLines(text);
-  await denops.call("nvim_buf_set_lines", handle.bufnr, 0, -1, true, lines);
+  await buffer.replace(denops, handle.bufnr, lines);
 }
 
 export async function appendScratch(
@@ -54,22 +49,13 @@ export async function appendScratch(
 ): Promise<void> {
   const lines = splitLines(text);
   if (lines.length === 0) return;
-  const currentLines = ensure(
-    await denops.call(
-      "nvim_buf_get_lines",
-      handle.bufnr,
-      0,
-      -1,
-      true,
-    ),
-    is.ArrayOf(is.String),
-  );
+  const currentLines = await buffer.get(denops, handle.bufnr);
   if (currentLines.length === 1 && currentLines[0] === "") {
     await replaceScratch(denops, handle, lines.join("\n"));
     return;
   }
   const newLines = currentLines.concat(lines);
-  await denops.call("nvim_buf_set_lines", handle.bufnr, 0, -1, true, newLines);
+  await buffer.replace(denops, handle.bufnr, newLines);
 }
 
 export async function disposeScratch(
@@ -78,14 +64,11 @@ export async function disposeScratch(
 ): Promise<void> {
   if (handle.winid !== null) {
     const exists = ensure(
-      await denops.call(
-        "nvim_win_is_valid",
-        handle.winid,
-      ),
+      await nvimFn.nvim_win_is_valid(denops, handle.winid),
       is.Boolean,
     );
     if (exists) {
-      await denops.call("nvim_win_close", handle.winid, true);
+      await nvimFn.nvim_win_close(denops, handle.winid, true);
     }
   }
 }

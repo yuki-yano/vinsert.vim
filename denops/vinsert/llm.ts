@@ -92,7 +92,7 @@ export async function streamGenerate(
       ...requestOptions,
       ...(shouldStream ? { stream: true } : {}),
       input: [
-        { role: "system", content: options.config.systemPrompt },
+        { role: "developer", content: options.config.systemPrompt },
         { role: "user", content: prompt },
       ],
     }),
@@ -139,7 +139,8 @@ export async function streamGenerate(
           continue;
         }
         if (rawPayload.type === "response.error") {
-          const message = rawPayload.error?.message ?? "Unknown streaming error";
+          const message = rawPayload.error?.message ??
+            "Unknown streaming error";
           throw new ResponseStreamError(message);
         }
         const delta = extractTextDelta(rawPayload);

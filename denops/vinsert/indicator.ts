@@ -1,4 +1,4 @@
-import { type Denops, fn, helper } from "./deps/denops.ts";
+import { type Denops, fn, helper, nvimFn } from "./deps/denops.ts";
 import { ensure, is } from "./deps/unknownutil.ts";
 import {
   DEFAULT_INDICATOR_HIGHLIGHTS,
@@ -39,10 +39,7 @@ export function getIndicatorAnchor():
 async function ensureNamespace(denops: Denops): Promise<number> {
   if (namespaceId !== null) return namespaceId;
   const id = ensure(
-    await denops.call(
-      "nvim_create_namespace",
-      "vinsert.indicator",
-    ),
+    await nvimFn.nvim_create_namespace(denops, "vinsert.indicator"),
     is.Number,
   );
   namespaceId = id;
@@ -105,8 +102,8 @@ async function renderIndicator(
   if (virtState && virtState.bufnr === baseAnchor.bufnr) {
     try {
       const position = ensure(
-        await denops.call(
-          "nvim_buf_get_extmark_by_id",
+        await nvimFn.nvim_buf_get_extmark_by_id(
+          denops,
           virtState.bufnr,
           ns,
           virtState.markId,
@@ -124,8 +121,8 @@ async function renderIndicator(
   const row = await clampAnchorRow(denops, baseAnchor.bufnr, anchorRow);
   anchor = { bufnr: baseAnchor.bufnr, row };
   if (virtState && virtState.bufnr !== baseAnchor.bufnr) {
-    await denops.call(
-      "nvim_buf_del_extmark",
+    await nvimFn.nvim_buf_del_extmark(
+      denops,
       virtState.bufnr,
       ns,
       virtState.markId,
@@ -145,8 +142,8 @@ async function renderIndicator(
     options.id = virtState.markId;
   }
   const markId = ensure(
-    await denops.call(
-      "nvim_buf_set_extmark",
+    await nvimFn.nvim_buf_set_extmark(
+      denops,
       baseAnchor.bufnr,
       ns,
       row,
@@ -182,7 +179,7 @@ async function clampAnchorRow(
   row: number,
 ): Promise<number> {
   const lineCount = ensure(
-    await denops.call("nvim_buf_line_count", bufnr),
+    await nvimFn.nvim_buf_line_count(denops, bufnr),
     is.Number,
   );
   const maxRow = Math.max(lineCount - 1, 0);
@@ -218,8 +215,8 @@ function startBlink(
     if (virtState.bufnr === bufnr) {
       try {
         const position = ensure(
-          await denops.call(
-            "nvim_buf_get_extmark_by_id",
+          await nvimFn.nvim_buf_get_extmark_by_id(
+            denops,
             bufnr,
             ns,
             virtState.markId,
@@ -236,8 +233,8 @@ function startBlink(
     }
     anchor = { bufnr, row: currentRow };
     try {
-      await denops.call(
-        "nvim_buf_set_extmark",
+      await nvimFn.nvim_buf_set_extmark(
+        denops,
         bufnr,
         ns,
         currentRow,
@@ -270,7 +267,7 @@ async function removeIndicator(
   if (virtState) {
     const { bufnr, markId } = virtState;
     const ns = await ensureNamespace(denops);
-    await denops.call("nvim_buf_del_extmark", bufnr, ns, markId).catch(
+    await nvimFn.nvim_buf_del_extmark(denops, bufnr, ns, markId).catch(
       () => {},
     );
     virtState = null;

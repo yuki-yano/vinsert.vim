@@ -75,7 +75,8 @@ vim.g.vinsert_always_yank = false -- set true to always copy the final text into
 
 ### Model configuration
 
-Speech-to-text defaults to `gpt-4o-transcribe`. To switch to a different Whisper/4o variant:
+Speech-to-text defaults to `gpt-4o-transcribe`. To switch to a different
+Whisper/4o variant:
 
 ```lua
 vim.g.vinsert_stt_model = "gpt-4o-mini-transcribe"
