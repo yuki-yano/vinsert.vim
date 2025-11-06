@@ -67,7 +67,7 @@ type LastCapture = {
   };
   result: {
     transcript: string;
-    finalText: string;
+    resolvedText: string;
   };
 };
 
@@ -230,7 +230,7 @@ export function main(denops: Denops): void {
       );
       sessions.set(sessionId, session);
       restoreSessionStateFromCapture(session, capture);
-      session.finalText = "";
+      session.resolvedText = "";
       session.scratchHandle = null;
       if (session.mode === "insert" && session.reservation) {
         const reservation = await clearReservationForRetry(
@@ -294,7 +294,7 @@ async function beginRecording(denops: Denops, rawMode: unknown): Promise<void> {
     await initializeSessionReservationMark(denops, session);
     await focusSession(denops, sessionId);
     session.recorder = await startRecording(denops, config);
-    session.finalText = "";
+    session.resolvedText = "";
     session.reservation = null;
     session.scratchHandle = null;
     await updateSessionPhase(denops, sessionId, "recording");
@@ -361,7 +361,7 @@ async function runSessionPipeline(
     denops,
     `[vinsert] ${label}: session=${sessionId} entering STT phase`,
   );
-  session.finalText = "";
+  session.resolvedText = "";
   await updateSessionPhase(denops, sessionId, "stt");
   await prepareSessionForPipeline(denops, session);
 
@@ -418,7 +418,7 @@ async function handlePipelineError(
     denops,
     target.mode,
     false,
-    context?.finalText ?? session.finalText,
+    context?.resolvedText ?? session.resolvedText,
     "",
   );
   await cleanupSession(denops, sessionId);
@@ -543,7 +543,7 @@ async function executeGenerationPhase(
           return;
         }
         batch += delta;
-        currentSession.finalText += delta;
+        currentSession.resolvedText += delta;
         if (batch.length >= threshold) {
           const content = batch;
           batch = "";
@@ -573,7 +573,7 @@ async function finalizeSessionRun(
 ): Promise<void> {
   const shouldYank = session.mode === "yank" || session.config.alwaysYank;
   if (shouldYank) {
-    await yankToRegister(denops, session.finalText, '"');
+    await yankToRegister(denops, session.resolvedText, '"');
   }
   if (session.mode === "insert" && session.reservation) {
     await finalizeUndo(denops, session.reservation.bufnr);
@@ -585,7 +585,7 @@ async function finalizeSessionRun(
     session.mode,
     true,
     transcript,
-    session.finalText,
+    session.resolvedText,
   );
   await updateSessionPhase(denops, sessionId, "idle");
   await cleanupSession(denops, sessionId);
@@ -609,7 +609,7 @@ function createLastCaptureRecord(
     },
     result: {
       transcript,
-      finalText: session.finalText,
+      resolvedText: session.resolvedText,
     },
   };
 }

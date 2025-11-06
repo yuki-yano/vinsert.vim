@@ -72,6 +72,8 @@ vim.g.vinsert_always_yank = false -- set true to always copy the final text into
 - `:VinsertStop`: abort recording if something goes wrong.
 - `:VinsertCancel`: stop recording immediately without running transcription or
   generation.
+- `:VinsertRetry`: re-run transcription and generation for the most recent audio
+  capture when the model output needs another pass.
 
 ### Model configuration
 

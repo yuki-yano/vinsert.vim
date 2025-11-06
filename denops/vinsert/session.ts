@@ -13,7 +13,7 @@ export type SessionContext = {
   phase: StatusPhase;
   reservation: InsertReservation | null;
   scratchHandle: ScratchHandle | null;
-  finalText: string;
+  resolvedText: string;
   insertAnchor: InsertAnchor;
   indicatorAnchor: IndicatorAnchor;
   recorder: RecorderHandle | null;
@@ -37,7 +37,7 @@ export function createSessionContext(
     phase: "idle",
     reservation: null,
     scratchHandle: null,
-    finalText: "",
+    resolvedText: "",
     insertAnchor: null,
     indicatorAnchor: null,
     recorder: null,
