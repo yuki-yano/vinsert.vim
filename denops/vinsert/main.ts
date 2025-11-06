@@ -38,6 +38,8 @@ import { logError, logInfo, logWarn } from "./logger.ts";
 import {
   createSessionContext,
   generateSessionId,
+  type IndicatorAnchor,
+  type InsertAnchor,
   isLatestSession,
   selectNextActiveSession,
   type SessionContext,
@@ -54,8 +56,51 @@ const sessions = new Map<SessionId, SessionContext>();
 let activeSessionId: SessionId | null = null;
 type AnchorPosition = { bufnr: number; row: number; col: number };
 
+type LastCapture = {
+  wav: Uint8Array;
+  config: RuntimeConfig;
+  mode: StatusMode;
+  reservation: InsertReservation | null;
+  insertAnchor: InsertAnchor;
+  indicatorAnchor: IndicatorAnchor;
+  transcript: string;
+  lastFinal: string;
+};
+
+let lastCapture: LastCapture | null = null;
+
 const isDomException = is.InstanceOf(DOMException);
 const isError = is.InstanceOf(Error);
+
+function cloneRuntimeConfig(config: RuntimeConfig): RuntimeConfig {
+  return {
+    ...config,
+    ffmpegArgs: [...config.ffmpegArgs],
+    llmRequestOptions: { ...config.llmRequestOptions },
+    indicatorHighlights: { ...config.indicatorHighlights },
+    scratch: { ...config.scratch },
+  };
+}
+
+function cloneReservation(
+  reservation: InsertReservation,
+): InsertReservation {
+  return { ...reservation };
+}
+
+function cloneInsertAnchor(anchor: InsertAnchor): InsertAnchor {
+  if (!anchor) {
+    return null;
+  }
+  return { ...anchor };
+}
+
+function cloneIndicatorAnchor(anchor: IndicatorAnchor): IndicatorAnchor {
+  if (!anchor) {
+    return null;
+  }
+  return { ...anchor };
+}
 
 export function main(denops: Denops): void {
   denops.dispatcher = {
@@ -134,6 +179,78 @@ export function main(denops: Denops): void {
       }
       await cancelRecording(denops, target.id);
     },
+    async retry(): Promise<void> {
+      if (getRecordingSession()) {
+        await logWarn(
+          denops,
+          "[vinsert] Recording is already in progress.",
+        );
+        return;
+      }
+      const capture = lastCapture;
+      if (!capture) {
+        await logWarn(
+          denops,
+          "[vinsert] No previous audio capture is available.",
+        );
+        return;
+      }
+      const sessionId = generateSessionId();
+      const session = createSessionContext(
+        sessionId,
+        capture.mode,
+        cloneRuntimeConfig(capture.config),
+      );
+      sessions.set(sessionId, session);
+      session.insertAnchor = cloneInsertAnchor(capture.insertAnchor);
+      session.indicatorAnchor = cloneIndicatorAnchor(
+        capture.indicatorAnchor,
+      );
+      session.reservation = capture.reservation
+        ? cloneReservation(capture.reservation)
+        : null;
+      session.lastFinal = "";
+      session.scratchHandle = null;
+      if (session.mode === "insert" && session.reservation) {
+        const reservation = cloneReservation(session.reservation);
+        await insertStream(denops, reservation, "", { replace: true });
+        session.reservation = reservation;
+        session.insertAnchor = {
+          bufnr: reservation.bufnr,
+          row: reservation.startRow,
+          col: reservation.startCol,
+        };
+        session.indicatorAnchor = {
+          bufnr: reservation.bufnr,
+          row: reservation.startRow,
+        };
+        session.reservationMarkId = null;
+      }
+      try {
+        await focusSession(denops, sessionId);
+      } catch {
+        // ignore focus errors before retrying
+      }
+      const apiKey = await resolveApiKey(denops);
+      try {
+        await runSessionPipeline(
+          denops,
+          sessionId,
+          session,
+          capture.wav.slice(),
+          apiKey,
+          "retry",
+        );
+      } catch (error) {
+        await handlePipelineError(
+          denops,
+          sessionId,
+          session,
+          error,
+          "retry",
+        );
+      }
+    },
   };
 }
 
@@ -176,11 +293,6 @@ async function finishRecording(
   }
   const apiKey = await resolveApiKey(denops);
   try {
-    await logInfo(
-      denops,
-      `[vinsert] finishRecording: session=${sessionId} entering STT phase`,
-    );
-    await updateSessionPhase(denops, sessionId, "stt");
     if (!session.recorder) {
       throw new Error("Recorder handle is missing.");
     }
@@ -194,157 +306,214 @@ async function finishRecording(
       denops,
       `[vinsert] finishRecording: wav size=${wav.length} bytes`,
     );
-    if (session.mode === "insert") {
-      session.reservation = await ensureSessionInsertReservation(
-        denops,
-        session,
-      );
-    } else if (session.mode === "scratch") {
-      session.scratchHandle = await prepareScratch(denops, session.config);
-    }
-    const onPartial = (text: string): void => {
-      logInfo(
-        denops,
-        `[vinsert] STT partial length=${text.length} session=${sessionId}`,
-      ).catch(() => {});
-      const current = sessions.get(sessionId);
-      if (!current || current.canceled) {
-        return;
-      }
-      if (current.mode === "insert" && current.reservation) {
-        Promise.resolve()
-          .then(async () => {
-            await syncSessionAnchors(denops, current);
-            if (!current.reservation) {
-              return;
-            }
-            await insertStream(
-              denops,
-              current.reservation,
-              text,
-              { replace: true },
-            );
-          })
-          .catch(() => {});
-      }
-      if (current.mode === "scratch" && current.scratchHandle) {
-        replaceScratch(denops, current.scratchHandle, text).catch(() => {});
-      }
-    };
-    session.sttController = new AbortController();
-    const sttSignal = session.sttController.signal;
-    let transcript = "";
-    try {
-      transcript = await transcribeByMode(
-        denops,
-        session.config.sttStreamingMode,
-        wav,
-        {
-          apiKey,
-          config: session.config,
-          onPartial,
-          onStatus: async (message) => {
-            await logInfo(denops, message).catch(() => {});
-          },
-          signal: sttSignal,
-        },
-      );
-    } finally {
-      session.sttController = null;
-    }
+    await runSessionPipeline(
+      denops,
+      sessionId,
+      session,
+      wav,
+      apiKey,
+      "finishRecording",
+    );
+  } catch (error) {
+    await handlePipelineError(
+      denops,
+      sessionId,
+      session,
+      error,
+      "finishRecording",
+    );
+  }
+}
+
+async function runSessionPipeline(
+  denops: Denops,
+  sessionId: SessionId,
+  session: SessionContext,
+  wav: Uint8Array,
+  apiKey: string,
+  source: "finishRecording" | "retry",
+): Promise<void> {
+  const label = source === "retry" ? "retry" : "finishRecording";
+  await logInfo(
+    denops,
+    `[vinsert] ${label}: session=${sessionId} entering STT phase`,
+  );
+  await updateSessionPhase(denops, sessionId, "stt");
+  session.lastFinal = "";
+  if (session.mode === "insert") {
+    session.reservation = await ensureSessionInsertReservation(
+      denops,
+      session,
+    );
+  } else if (session.mode === "scratch") {
+    session.scratchHandle = await prepareScratch(denops, session.config);
+  }
+  const onPartial = (text: string): void => {
+    logInfo(
+      denops,
+      `[vinsert] STT partial length=${text.length} session=${sessionId}`,
+    ).catch(() => {});
     const current = sessions.get(sessionId);
     if (!current || current.canceled) {
       return;
     }
-    await logInfo(
-      denops,
-      `[vinsert] STT completed: length=${transcript.length}`,
-    );
-    await updateSessionPhase(denops, sessionId, "gen");
-    let batch = "";
-    const threshold = Math.max(session.config.textStreamBatchTokens, 1) *
-      APPROX_BYTES_PER_TOKEN;
-    const flush = (content: string): void => {
-      if (!content) return;
-      const pending = sessions.get(sessionId);
-      if (!pending) return;
-      pending.flushPromise = pending.flushPromise.then(() =>
-        handleSessionDelta(denops, sessionId, content)
-      )
-        .catch((error) => {
-          logError(denops, "[vinsert] flush failed", error).catch(() => {});
-        });
-    };
-    session.genController = new AbortController();
-    const genSignal = session.genController.signal;
-    try {
-      await streamGenerate(transcript, {
-        apiKey,
-        config: session.config,
-        signal: genSignal,
-        onDelta: (delta) => {
-          const currentSession = sessions.get(sessionId);
-          if (!currentSession || currentSession.canceled) {
+    if (current.mode === "insert" && current.reservation) {
+      Promise.resolve()
+        .then(async () => {
+          await syncSessionAnchors(denops, current);
+          if (!current.reservation) {
             return;
           }
-          batch += delta;
-          currentSession.lastFinal += delta;
-          if (batch.length >= threshold) {
-            const content = batch;
-            batch = "";
-            flush(content);
-          }
+          await insertStream(
+            denops,
+            current.reservation,
+            text,
+            { replace: true },
+          );
+        })
+        .catch(() => {});
+    }
+    if (current.mode === "scratch" && current.scratchHandle) {
+      replaceScratch(denops, current.scratchHandle, text).catch(() => {});
+    }
+  };
+  session.sttController = new AbortController();
+  const sttSignal = session.sttController.signal;
+  let transcript = "";
+  try {
+    transcript = await transcribeByMode(
+      denops,
+      session.config.sttStreamingMode,
+      wav,
+      {
+        apiKey,
+        config: session.config,
+        onPartial,
+        onStatus: async (message) => {
+          await logInfo(denops, message).catch(() => {});
         },
-      });
-    } finally {
-      session.genController = null;
-    }
-    const latest = sessions.get(sessionId);
-    if (!latest || latest.canceled) {
-      return;
-    }
-    await latest.flushPromise;
-    if (batch.length > 0) {
-      await handleSessionDelta(denops, sessionId, batch);
-    }
-    const shouldYank = latest.mode === "yank" || latest.config.alwaysYank;
-    if (shouldYank) {
-      await yankToRegister(denops, latest.lastFinal, '"');
-    }
-    if (latest.mode === "insert" && latest.reservation) {
-      await finalizeUndo(denops, latest.reservation.bufnr);
-    }
-    await logInfo(denops, "[vinsert] Generation finished.");
-    await emitCompletionEvent(
-      denops,
-      latest.mode,
-      true,
-      transcript,
-      latest.lastFinal,
+        signal: sttSignal,
+      },
     );
-    await updateSessionPhase(denops, sessionId, "idle");
-    await cleanupSession(denops, sessionId);
-  } catch (error) {
+  } finally {
     session.sttController = null;
-    session.genController = null;
-    if (session.canceled || isAbortError(error)) {
-      return;
-    }
-    const context = sessions.get(sessionId);
-    if (context) {
-      await updateSessionPhase(denops, sessionId, "error");
-    }
-    await logError(denops, "[vinsert] finishRecording: error", error);
-    const target = context ?? session;
-    await emitCompletionEvent(
-      denops,
-      target.mode,
-      false,
-      context?.lastFinal ?? session.lastFinal,
-      "",
-    );
-    await cleanupSession(denops, sessionId);
   }
+  const current = sessions.get(sessionId);
+  if (!current || current.canceled) {
+    return;
+  }
+  await logInfo(
+    denops,
+    `[vinsert] STT completed: length=${transcript.length}`,
+  );
+  await updateSessionPhase(denops, sessionId, "gen");
+  let batch = "";
+  const threshold = Math.max(session.config.textStreamBatchTokens, 1) *
+    APPROX_BYTES_PER_TOKEN;
+  const flush = (content: string): void => {
+    if (!content) return;
+    const pending = sessions.get(sessionId);
+    if (!pending) return;
+    pending.flushPromise = pending.flushPromise.then(() =>
+      handleSessionDelta(denops, sessionId, content)
+    )
+      .catch((error) => {
+        logError(denops, "[vinsert] flush failed", error).catch(() => {});
+      });
+  };
+  session.genController = new AbortController();
+  const genSignal = session.genController.signal;
+  try {
+    await streamGenerate(transcript, {
+      apiKey,
+      config: session.config,
+      signal: genSignal,
+      onDelta: (delta) => {
+        const currentSession = sessions.get(sessionId);
+        if (!currentSession || currentSession.canceled) {
+          return;
+        }
+        batch += delta;
+        currentSession.lastFinal += delta;
+        if (batch.length >= threshold) {
+          const content = batch;
+          batch = "";
+          flush(content);
+        }
+      },
+    });
+  } finally {
+    session.genController = null;
+  }
+  const latest = sessions.get(sessionId);
+  if (!latest || latest.canceled) {
+    return;
+  }
+  await latest.flushPromise;
+  if (batch.length > 0) {
+    await handleSessionDelta(denops, sessionId, batch);
+  }
+  const shouldYank = latest.mode === "yank" || latest.config.alwaysYank;
+  if (shouldYank) {
+    await yankToRegister(denops, latest.lastFinal, '"');
+  }
+  if (latest.mode === "insert" && latest.reservation) {
+    await finalizeUndo(denops, latest.reservation.bufnr);
+  }
+  lastCapture = {
+    wav: wav.slice(),
+    config: cloneRuntimeConfig(latest.config),
+    mode: latest.mode,
+    reservation: latest.reservation
+      ? cloneReservation(latest.reservation)
+      : null,
+    insertAnchor: cloneInsertAnchor(latest.insertAnchor),
+    indicatorAnchor: cloneIndicatorAnchor(latest.indicatorAnchor),
+    transcript,
+    lastFinal: latest.lastFinal,
+  };
+  await logInfo(denops, "[vinsert] Generation finished.");
+  await emitCompletionEvent(
+    denops,
+    latest.mode,
+    true,
+    transcript,
+    latest.lastFinal,
+  );
+  await updateSessionPhase(denops, sessionId, "idle");
+  await cleanupSession(denops, sessionId);
+}
+
+async function handlePipelineError(
+  denops: Denops,
+  sessionId: SessionId,
+  session: SessionContext,
+  error: unknown,
+  source: "finishRecording" | "retry",
+): Promise<void> {
+  session.sttController = null;
+  session.genController = null;
+  if (session.canceled || isAbortError(error)) {
+    return;
+  }
+  const context = sessions.get(sessionId);
+  if (context) {
+    await updateSessionPhase(denops, sessionId, "error");
+  }
+  await logError(
+    denops,
+    `[vinsert] ${source}: error`,
+    error,
+  );
+  const target = context ?? session;
+  await emitCompletionEvent(
+    denops,
+    target.mode,
+    false,
+    context?.lastFinal ?? session.lastFinal,
+    "",
+  );
+  await cleanupSession(denops, sessionId);
 }
 
 async function cancelRecording(
