@@ -5,13 +5,13 @@ export async function emitCompletionEvent(
   mode: string,
   success: boolean,
   transcript: string,
-  finalText: string,
+  resolvedText: string,
 ): Promise<void> {
   await variable.g.set(denops, "vinsert_last_completion", {
     mode,
     success,
     transcript,
-    final: finalText,
+    final: resolvedText,
   });
   await helper.execute(denops, "doautocmd <nomodeline> User VinsertComplete");
 }
