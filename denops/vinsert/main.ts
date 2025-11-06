@@ -1,32 +1,20 @@
 import { type Denops, fn, helper, nvimFn, variable } from "./deps/denops.ts";
 import { ensure, is } from "./deps/unknownutil.ts";
-import {
-  loadConfig,
-  type RuntimeConfig,
-  type StreamingMode,
-} from "./config.ts";
+import { loadConfig } from "./config.ts";
 import { startRecording, stopRecording } from "./recorder.ts";
 import {
-  finalizeUndo,
   type InsertReservation,
   insertStream,
   reserveInsertRange,
   sanitizeReservation,
 } from "./buffer.ts";
-import {
-  transcribeBatch,
-  transcribeProgressive,
-  transcribeServer,
-} from "./stt.ts";
-import { streamGenerate } from "./llm.ts";
-import { appendScratch, prepareScratch, replaceScratch } from "./scratch.ts";
+import { appendScratch } from "./scratch.ts";
 import {
   getIndicatorAnchor,
   refreshIndicator,
   setIndicatorAnchor,
   setPhase,
 } from "./indicator.ts";
-import { yankToRegister } from "./yank.ts";
 import { emitCompletionEvent } from "./events.ts";
 import {
   buildStatusSnapshot,
@@ -38,17 +26,18 @@ import { logError, logInfo, logWarn } from "./logger.ts";
 import {
   createSessionContext,
   generateSessionId,
-  type IndicatorAnchor,
-  type InsertAnchor,
   isLatestSession,
   selectNextActiveSession,
   type SessionContext,
 } from "./session.ts";
+import {
+  cloneRuntimeConfig,
+  LastCapture,
+  restoreSessionStateFromCapture,
+} from "./capture.ts";
+import { type PipelineDeps, runSessionPipeline } from "./pipeline.ts";
 
 type SessionId = string;
-
-// Rough conversion factor between tokens and bytes for streaming threshold logic.
-const APPROX_BYTES_PER_TOKEN = 4;
 
 let reservationNamespace: number | null = null;
 
@@ -56,68 +45,23 @@ const sessions = new Map<SessionId, SessionContext>();
 let activeSessionId: SessionId | null = null;
 type AnchorPosition = { bufnr: number; row: number; col: number };
 
-type LastCapture = {
-  wav: Uint8Array;
-  session: {
-    config: RuntimeConfig;
-    mode: StatusMode;
-    reservation: InsertReservation | null;
-    insertAnchor: InsertAnchor;
-    indicatorAnchor: IndicatorAnchor;
-  };
-  result: {
-    transcript: string;
-    resolvedText: string;
-  };
-};
-
 let lastCapture: LastCapture | null = null;
 
 const isDomException = is.InstanceOf(DOMException);
 const isError = is.InstanceOf(Error);
 
-function cloneRuntimeConfig(config: RuntimeConfig): RuntimeConfig {
+function createPipelineDeps(): PipelineDeps {
   return {
-    ...config,
-    ffmpegArgs: [...config.ffmpegArgs],
-    llmRequestOptions: { ...config.llmRequestOptions },
-    indicatorHighlights: { ...config.indicatorHighlights },
-    scratch: { ...config.scratch },
+    sessions,
+    handleSessionDelta,
+    syncSessionAnchors,
+    updateSessionPhase,
+    cleanupSession,
+    ensureSessionInsertReservation,
+    setLastCapture: (capture) => {
+      lastCapture = capture;
+    },
   };
-}
-
-function cloneReservation(
-  reservation: InsertReservation,
-): InsertReservation {
-  return { ...reservation };
-}
-
-function cloneInsertAnchor(anchor: InsertAnchor): InsertAnchor {
-  if (!anchor) {
-    return null;
-  }
-  return { ...anchor };
-}
-
-function cloneIndicatorAnchor(anchor: IndicatorAnchor): IndicatorAnchor {
-  if (!anchor) {
-    return null;
-  }
-  return { ...anchor };
-}
-
-function restoreSessionStateFromCapture(
-  session: SessionContext,
-  capture: LastCapture,
-): void {
-  session.mode = capture.session.mode;
-  session.insertAnchor = cloneInsertAnchor(capture.session.insertAnchor);
-  session.indicatorAnchor = cloneIndicatorAnchor(
-    capture.session.indicatorAnchor,
-  );
-  session.reservation = capture.session.reservation
-    ? cloneReservation(capture.session.reservation)
-    : null;
 }
 
 export function main(denops: Denops): void {
@@ -248,6 +192,7 @@ export function main(denops: Denops): void {
           capture.wav.slice(),
           apiKey,
           "retry",
+          createPipelineDeps(),
         );
       } catch (error) {
         await handlePipelineError(
@@ -321,6 +266,7 @@ async function finishRecording(
       wav,
       apiKey,
       "finishRecording",
+      createPipelineDeps(),
     );
   } catch (error) {
     await handlePipelineError(
@@ -331,50 +277,6 @@ async function finishRecording(
       "finishRecording",
     );
   }
-}
-
-async function runSessionPipeline(
-  denops: Denops,
-  sessionId: SessionId,
-  session: SessionContext,
-  wav: Uint8Array,
-  apiKey: string,
-  source: "finishRecording" | "retry",
-): Promise<void> {
-  const label = source === "retry" ? "retry" : "finishRecording";
-  await logInfo(
-    denops,
-    `[vinsert] ${label}: session=${sessionId} entering STT phase`,
-  );
-  session.resolvedText = "";
-  await updateSessionPhase(denops, sessionId, "stt");
-  await prepareSessionForPipeline(denops, session);
-
-  const transcript = await executeSttPhase(
-    denops,
-    sessionId,
-    session,
-    wav,
-    apiKey,
-  );
-  const current = sessions.get(sessionId);
-  if (!current || current.canceled) {
-    return;
-  }
-
-  await logInfo(
-    denops,
-    `[vinsert] STT completed: length=${transcript.length}`,
-  );
-  await updateSessionPhase(denops, sessionId, "gen");
-  await executeGenerationPhase(denops, sessionId, current, transcript, apiKey);
-
-  const latest = sessions.get(sessionId);
-  if (!latest || latest.canceled) {
-    return;
-  }
-  await latest.flushPromise;
-  await finalizeSessionRun(denops, sessionId, latest, transcript, wav);
 }
 
 async function handlePipelineError(
@@ -407,196 +309,6 @@ async function handlePipelineError(
     "",
   );
   await cleanupSession(denops, sessionId);
-}
-
-async function prepareSessionForPipeline(
-  denops: Denops,
-  session: SessionContext,
-): Promise<void> {
-  if (session.mode === "insert") {
-    session.reservation = await ensureSessionInsertReservation(
-      denops,
-      session,
-    );
-    return;
-  }
-  if (session.mode === "scratch") {
-    session.scratchHandle = await prepareScratch(denops, session.config);
-  }
-}
-
-async function executeSttPhase(
-  denops: Denops,
-  sessionId: SessionId,
-  session: SessionContext,
-  wav: Uint8Array,
-  apiKey: string,
-): Promise<string> {
-  const onPartial = createSttPartialHandler(denops, sessionId);
-  session.sttController = new AbortController();
-  const sttSignal = session.sttController.signal;
-  try {
-    return await transcribeByMode(
-      denops,
-      session.config.sttStreamingMode,
-      wav,
-      {
-        apiKey,
-        config: session.config,
-        onPartial,
-        onStatus: async (message) => {
-          await logInfo(denops, message).catch(() => {});
-        },
-        signal: sttSignal,
-      },
-    );
-  } finally {
-    session.sttController = null;
-  }
-}
-
-function createSttPartialHandler(
-  denops: Denops,
-  sessionId: SessionId,
-): (text: string) => void {
-  return (text: string) => {
-    logInfo(
-      denops,
-      `[vinsert] STT partial length=${text.length} session=${sessionId}`,
-    ).catch(() => {});
-    const current = sessions.get(sessionId);
-    if (!current || current.canceled) {
-      return;
-    }
-    if (current.mode === "insert" && current.reservation) {
-      Promise.resolve()
-        .then(async () => {
-          await syncSessionAnchors(denops, current);
-          if (!current.reservation) {
-            return;
-          }
-          await insertStream(
-            denops,
-            current.reservation,
-            text,
-            { replace: true },
-          );
-        })
-        .catch(() => {});
-    }
-    if (current.mode === "scratch" && current.scratchHandle) {
-      replaceScratch(denops, current.scratchHandle, text).catch(() => {});
-    }
-  };
-}
-
-async function executeGenerationPhase(
-  denops: Denops,
-  sessionId: SessionId,
-  session: SessionContext,
-  transcript: string,
-  apiKey: string,
-): Promise<void> {
-  let batch = "";
-  const threshold = Math.max(session.config.textStreamBatchTokens, 1) *
-    APPROX_BYTES_PER_TOKEN;
-  const flush = (content: string): void => {
-    if (!content) {
-      return;
-    }
-    const pending = sessions.get(sessionId);
-    if (!pending) {
-      return;
-    }
-    pending.flushPromise = pending.flushPromise.then(() =>
-      handleSessionDelta(denops, sessionId, content)
-    )
-      .catch((error) => {
-        logError(denops, "[vinsert] flush failed", error).catch(() => {});
-      });
-  };
-  session.genController = new AbortController();
-  const genSignal = session.genController.signal;
-  try {
-    await streamGenerate(transcript, {
-      apiKey,
-      config: session.config,
-      signal: genSignal,
-      onDelta: (delta) => {
-        const currentSession = sessions.get(sessionId);
-        if (!currentSession || currentSession.canceled) {
-          return;
-        }
-        batch += delta;
-        currentSession.resolvedText += delta;
-        if (batch.length >= threshold) {
-          const content = batch;
-          batch = "";
-          flush(content);
-        }
-      },
-    });
-  } finally {
-    session.genController = null;
-  }
-  const latest = sessions.get(sessionId);
-  if (!latest || latest.canceled) {
-    return;
-  }
-  await latest.flushPromise;
-  if (batch.length > 0) {
-    await handleSessionDelta(denops, sessionId, batch);
-  }
-}
-
-async function finalizeSessionRun(
-  denops: Denops,
-  sessionId: SessionId,
-  session: SessionContext,
-  transcript: string,
-  wav: Uint8Array,
-): Promise<void> {
-  const shouldYank = session.mode === "yank" || session.config.alwaysYank;
-  if (shouldYank) {
-    await yankToRegister(denops, session.resolvedText, '"');
-  }
-  if (session.mode === "insert" && session.reservation) {
-    await finalizeUndo(denops, session.reservation.bufnr);
-  }
-  lastCapture = createLastCaptureRecord(session, transcript, wav);
-  await logInfo(denops, "[vinsert] Generation finished.");
-  await emitCompletionEvent(
-    denops,
-    session.mode,
-    true,
-    transcript,
-    session.resolvedText,
-  );
-  await updateSessionPhase(denops, sessionId, "idle");
-  await cleanupSession(denops, sessionId);
-}
-
-function createLastCaptureRecord(
-  session: SessionContext,
-  transcript: string,
-  wav: Uint8Array,
-): LastCapture {
-  return {
-    wav: wav.slice(),
-    session: {
-      config: cloneRuntimeConfig(session.config),
-      mode: session.mode,
-      reservation: session.reservation
-        ? cloneReservation(session.reservation)
-        : null,
-      insertAnchor: cloneInsertAnchor(session.insertAnchor),
-      indicatorAnchor: cloneIndicatorAnchor(session.indicatorAnchor),
-    },
-    result: {
-      transcript,
-      resolvedText: session.resolvedText,
-    },
-  };
 }
 
 async function cancelRecording(
@@ -985,70 +697,4 @@ function isAbortError(error: unknown): boolean {
     return true;
   }
   return false;
-}
-
-async function transcribeByMode(
-  denops: Denops,
-  mode: StreamingMode,
-  wav: Uint8Array,
-  options: {
-    apiKey: string;
-    config: RuntimeConfig;
-    onPartial: (text: string) => void;
-    onStatus?: (message: string) => void;
-    signal?: AbortSignal;
-  },
-): Promise<string> {
-  switch (mode) {
-    case "server":
-      return await transcribeServer(wav, {
-        apiKey: options.apiKey,
-        config: options.config,
-        onPartial: options.onPartial,
-        onStatus: options.onStatus,
-        signal: options.signal,
-      });
-    case "progressive":
-      return await transcribeProgressive(wav, {
-        apiKey: options.apiKey,
-        config: options.config,
-        onPartial: options.onPartial,
-        onStatus: options.onStatus,
-        signal: options.signal,
-      });
-    case "off":
-      return await transcribeBatch(wav, {
-        apiKey: options.apiKey,
-        config: options.config,
-        onStatus: options.onStatus,
-        signal: options.signal,
-      });
-    case "auto":
-    default:
-      try {
-        return await transcribeServer(wav, {
-          apiKey: options.apiKey,
-          config: options.config,
-          onPartial: options.onPartial,
-          onStatus: options.onStatus,
-          signal: options.signal,
-        });
-      } catch (error) {
-        if (isAbortError(error)) {
-          throw error;
-        }
-        const message = `[vinsert] STT: SSE failed (${
-          isError(error) ? error.message : String(error)
-        })`;
-        options.onStatus?.(message);
-        await logError(denops, message, error);
-        return await transcribeProgressive(wav, {
-          apiKey: options.apiKey,
-          config: options.config,
-          onPartial: options.onPartial,
-          onStatus: options.onStatus,
-          signal: options.signal,
-        });
-      }
-  }
 }
