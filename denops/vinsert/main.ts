@@ -1,7 +1,6 @@
 import { type Denops, fn, helper, nvimFn, variable } from "./deps/denops.ts";
 import { ensure, is } from "./deps/unknownutil.ts";
 import { loadConfig } from "./config.ts";
-import { startRecording, stopRecording } from "./recorder.ts";
 import { insertStream, sanitizeReservation } from "./buffer.ts";
 import { appendScratch } from "./scratch.ts";
 import {
@@ -23,7 +22,6 @@ import {
   generateSessionId,
   isLatestSession,
   selectNextActiveSession,
-  type SessionContext,
 } from "./session.ts";
 import {
   cloneRuntimeConfig,
@@ -43,6 +41,7 @@ import {
   initializeSessionReservationMark,
   syncSessionAnchors,
 } from "./reservation.ts";
+import { createRecordingController } from "./recording.ts";
 
 type SessionId = string;
 
@@ -67,21 +66,42 @@ function createPipelineDeps(): PipelineDeps {
   };
 }
 
+const recordingController = createRecordingController({
+  sessionRegistry,
+  loadConfig,
+  toMode,
+  createSessionContext,
+  generateSessionId,
+  createInsertAnchor,
+  initializeSessionReservationMark,
+  focusSession: focusSessionWithDeps,
+  updateSessionPhase,
+  cleanupSession,
+  runSessionPipeline,
+  createPipelineDeps,
+  resolveApiKey,
+  logInfo,
+  logError,
+  logWarn,
+  emitCompletionEvent,
+  isAbortError,
+});
+
 export function main(denops: Denops): void {
   denops.dispatcher = {
     async toggle(mode?: unknown): Promise<void> {
-      const recording = getRecordingSession(sessionRegistry);
-      if (!recording) {
+      const activeRecording = getRecordingSession(sessionRegistry);
+      if (!activeRecording) {
         await logInfo(denops, "[vinsert] toggle: begin recording").catch(
           () => {},
         );
-        await beginRecording(denops, mode);
+        await recordingController.beginRecording(denops, mode);
         return;
       }
       await logInfo(denops, "[vinsert] toggle: finish recording").catch(
         () => {},
       );
-      await finishRecording(denops, recording.id);
+      await recordingController.finishRecording(denops, activeRecording.id);
     },
     async start(mode?: unknown): Promise<void> {
       if (getRecordingSession(sessionRegistry)) {
@@ -92,16 +112,16 @@ export function main(denops: Denops): void {
         return;
       }
       await logInfo(denops, "[vinsert] start: begin recording");
-      await beginRecording(denops, mode);
+      await recordingController.beginRecording(denops, mode);
     },
     async stop(): Promise<void> {
-      const recording = getRecordingSession(sessionRegistry);
-      if (!recording) {
+      const activeRecording = getRecordingSession(sessionRegistry);
+      if (!activeRecording) {
         await logWarn(denops, "[vinsert] Recording is not active.");
         return;
       }
       await logInfo(denops, "[vinsert] stop: finish recording");
-      await finishRecording(denops, recording.id);
+      await recordingController.finishRecording(denops, activeRecording.id);
     },
     async status(): Promise<void> {
       const active = getActiveSession(sessionRegistry);
@@ -145,7 +165,7 @@ export function main(denops: Denops): void {
         await logWarn(denops, "[vinsert] No session in progress.");
         return;
       }
-      await cancelRecording(denops, target.id);
+      await recordingController.cancelRecording(denops, target.id);
     },
     async retry(): Promise<void> {
       if (getRecordingSession(sessionRegistry)) {
@@ -201,7 +221,7 @@ export function main(denops: Denops): void {
           createPipelineDeps(),
         );
       } catch (error) {
-        await handlePipelineError(
+        await recordingController.handlePipelineError(
           denops,
           sessionId,
           session,
@@ -211,147 +231,6 @@ export function main(denops: Denops): void {
       }
     },
   };
-}
-
-async function beginRecording(denops: Denops, rawMode: unknown): Promise<void> {
-  const config = await loadConfig(denops);
-  const mode = toMode(rawMode);
-  const sessionId = generateSessionId();
-  const session = createSessionContext(sessionId, mode, config);
-  sessionRegistry.sessions.set(sessionId, session);
-  try {
-    await logInfo(
-      denops,
-      `[vinsert] beginRecording: session=${sessionId} mode=${mode}`,
-    );
-    const anchor = await createInsertAnchor(denops);
-    session.insertAnchor = anchor;
-    session.indicatorAnchor = { bufnr: anchor.bufnr, row: anchor.row };
-    await initializeSessionReservationMark(denops, session);
-    await focusSessionWithDeps(denops, sessionId);
-    session.recorder = await startRecording(denops, config);
-    session.resolvedText = "";
-    session.reservation = null;
-    session.scratchHandle = null;
-    await updateSessionPhase(denops, sessionId, "recording");
-    await logInfo(denops, "[vinsert] Recording started.");
-  } catch (error) {
-    await updateSessionPhase(denops, sessionId, "error");
-    await logError(denops, "[vinsert] beginRecording: failed", error);
-    await cleanupSession(denops, sessionId);
-  }
-}
-
-async function finishRecording(
-  denops: Denops,
-  sessionId: SessionId,
-): Promise<void> {
-  const session = sessionRegistry.sessions.get(sessionId);
-  if (!session) {
-    return;
-  }
-  const apiKey = await resolveApiKey(denops);
-  try {
-    if (!session.recorder) {
-      throw new Error("Recorder handle is missing.");
-    }
-    const wav = await stopRecording(
-      denops,
-      session.recorder,
-      session.config.keepAudio,
-    );
-    session.recorder = null;
-    await logInfo(
-      denops,
-      `[vinsert] finishRecording: wav size=${wav.length} bytes`,
-    );
-    await runSessionPipeline(
-      denops,
-      sessionId,
-      session,
-      wav,
-      apiKey,
-      "finishRecording",
-      createPipelineDeps(),
-    );
-  } catch (error) {
-    await handlePipelineError(
-      denops,
-      sessionId,
-      session,
-      error,
-      "finishRecording",
-    );
-  }
-}
-
-async function handlePipelineError(
-  denops: Denops,
-  sessionId: SessionId,
-  session: SessionContext,
-  error: unknown,
-  source: "finishRecording" | "retry",
-): Promise<void> {
-  session.sttController = null;
-  session.genController = null;
-  if (session.canceled || isAbortError(error)) {
-    return;
-  }
-  const context = sessionRegistry.sessions.get(sessionId);
-  if (context) {
-    await updateSessionPhase(denops, sessionId, "error");
-  }
-  await logError(
-    denops,
-    `[vinsert] ${source}: error`,
-    error,
-  );
-  const target = context ?? session;
-  await emitCompletionEvent(
-    denops,
-    target.mode,
-    false,
-    context?.resolvedText ?? session.resolvedText,
-    "",
-  );
-  await cleanupSession(denops, sessionId);
-}
-
-async function cancelRecording(
-  denops: Denops,
-  sessionId: SessionId,
-): Promise<void> {
-  const session = sessionRegistry.sessions.get(sessionId);
-  if (!session) {
-    await logWarn(denops, "[vinsert] Recording is not active.");
-    return;
-  }
-  await logInfo(
-    denops,
-    `[vinsert] cancelRecording: aborting session=${sessionId}`,
-  );
-  try {
-    if (session.recorder) {
-      await stopRecording(denops, session.recorder, session.config.keepAudio);
-    }
-  } catch (error) {
-    await logError(denops, "[vinsert] cancelRecording: stop failed", error);
-  } finally {
-    if (session.sttController) {
-      session.sttController.abort();
-    }
-    if (session.genController) {
-      session.genController.abort();
-    }
-    session.recorder = null;
-    session.sttController = null;
-    session.genController = null;
-    session.canceled = true;
-    await updateSessionPhase(denops, sessionId, "idle");
-    await emitCompletionEvent(denops, session.mode, false, "", "");
-    await cleanupSession(denops, sessionId);
-    await logInfo(denops, "[vinsert] Recording canceled.");
-  }
 }
 
 async function handleSessionDelta(
