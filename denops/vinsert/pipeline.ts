@@ -1,9 +1,5 @@
 import { prepareScratch, replaceScratch } from "./scratch.ts";
-import {
-  finalizeUndo,
-  type InsertReservation,
-  insertStream,
-} from "./buffer.ts";
+import { finalizeUndo, insertStream } from "./buffer.ts";
 import {
   transcribeBatch,
   transcribeProgressive,
@@ -18,6 +14,7 @@ import type { SessionContext } from "./session.ts";
 import type { LastCapture } from "./capture.ts";
 import { createLastCaptureRecord } from "./capture.ts";
 import type { StatusPhase } from "./status.ts";
+import { ensureSessionInsertReservation } from "./reservation.ts";
 
 export type SessionId = string;
 
@@ -38,10 +35,6 @@ export type PipelineDeps = {
     phase: StatusPhase,
   ) => Promise<void>;
   cleanupSession: (denops: Denops, sessionId: SessionId) => Promise<void>;
-  ensureSessionInsertReservation: (
-    denops: Denops,
-    session: SessionContext,
-  ) => Promise<InsertReservation>;
   setLastCapture: (capture: LastCapture) => void;
 };
 
@@ -63,7 +56,7 @@ export async function runSessionPipeline(
   );
   session.resolvedText = "";
   await deps.updateSessionPhase(denops, sessionId, "stt");
-  await prepareSessionForPipeline(denops, session, deps);
+  await prepareSessionForPipeline(denops, session);
 
   const transcript = await executeSttPhase(
     denops,
@@ -110,10 +103,9 @@ export async function runSessionPipeline(
 async function prepareSessionForPipeline(
   denops: Denops,
   session: SessionContext,
-  deps: PipelineDeps,
 ): Promise<void> {
   if (session.mode === "insert") {
-    session.reservation = await deps.ensureSessionInsertReservation(
+    session.reservation = await ensureSessionInsertReservation(
       denops,
       session,
     );

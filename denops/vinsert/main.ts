@@ -2,12 +2,7 @@ import { type Denops, fn, helper, nvimFn, variable } from "./deps/denops.ts";
 import { ensure, is } from "./deps/unknownutil.ts";
 import { loadConfig } from "./config.ts";
 import { startRecording, stopRecording } from "./recorder.ts";
-import {
-  type InsertReservation,
-  insertStream,
-  reserveInsertRange,
-  sanitizeReservation,
-} from "./buffer.ts";
+import { insertStream, sanitizeReservation } from "./buffer.ts";
 import { appendScratch } from "./scratch.ts";
 import {
   getIndicatorAnchor,
@@ -36,13 +31,22 @@ import {
   restoreSessionStateFromCapture,
 } from "./capture.ts";
 import { type PipelineDeps, runSessionPipeline } from "./pipeline.ts";
+import {
+  createSessionRegistry,
+  focusSession as focusSessionRegistry,
+  getActiveSession as registryGetActiveSession,
+  getCancelableSession as registryGetCancelableSession,
+  getRecordingSession as registryGetRecordingSession,
+} from "./session_manager.ts";
+import {
+  ensureReservationNamespace,
+  initializeSessionReservationMark,
+  syncSessionAnchors,
+} from "./reservation.ts";
 
 type SessionId = string;
 
-let reservationNamespace: number | null = null;
-
-const sessions = new Map<SessionId, SessionContext>();
-let activeSessionId: SessionId | null = null;
+const sessionRegistry = createSessionRegistry();
 type AnchorPosition = { bufnr: number; row: number; col: number };
 
 let lastCapture: LastCapture | null = null;
@@ -52,12 +56,11 @@ const isError = is.InstanceOf(Error);
 
 function createPipelineDeps(): PipelineDeps {
   return {
-    sessions,
+    sessions: sessionRegistry.sessions,
     handleSessionDelta,
     syncSessionAnchors,
     updateSessionPhase,
     cleanupSession,
-    ensureSessionInsertReservation,
     setLastCapture: (capture) => {
       lastCapture = capture;
     },
@@ -67,7 +70,7 @@ function createPipelineDeps(): PipelineDeps {
 export function main(denops: Denops): void {
   denops.dispatcher = {
     async toggle(mode?: unknown): Promise<void> {
-      const recording = getRecordingSession();
+      const recording = registryGetRecordingSession(sessionRegistry);
       if (!recording) {
         await logInfo(denops, "[vinsert] toggle: begin recording").catch(
           () => {},
@@ -81,7 +84,7 @@ export function main(denops: Denops): void {
       await finishRecording(denops, recording.id);
     },
     async start(mode?: unknown): Promise<void> {
-      if (getRecordingSession()) {
+      if (registryGetRecordingSession(sessionRegistry)) {
         await logWarn(
           denops,
           "[vinsert] Recording is already in progress.",
@@ -92,7 +95,7 @@ export function main(denops: Denops): void {
       await beginRecording(denops, mode);
     },
     async stop(): Promise<void> {
-      const recording = getRecordingSession();
+      const recording = registryGetRecordingSession(sessionRegistry);
       if (!recording) {
         await logWarn(denops, "[vinsert] Recording is not active.");
         return;
@@ -101,7 +104,7 @@ export function main(denops: Denops): void {
       await finishRecording(denops, recording.id);
     },
     async status(): Promise<void> {
-      const active = getActiveSession();
+      const active = registryGetActiveSession(sessionRegistry);
       const phase = active?.phase ?? "idle";
       const mode = active?.mode ?? "insert";
       const id = active?.id ?? "-";
@@ -111,14 +114,14 @@ export function main(denops: Denops): void {
       );
     },
     status_info(): Record<string, unknown> {
-      const active = getActiveSession();
+      const active = registryGetActiveSession(sessionRegistry);
       return buildStatusSnapshot(
         active?.phase ?? "idle",
         active?.mode ?? "insert",
       );
     },
     async refresh_indicator(): Promise<void> {
-      const active = getActiveSession();
+      const active = registryGetActiveSession(sessionRegistry);
       if (!active) {
         return;
       }
@@ -134,7 +137,10 @@ export function main(denops: Denops): void {
       }
     },
     async cancel(): Promise<void> {
-      const target = getCancelableSession();
+      const target = registryGetCancelableSession(
+        sessionRegistry,
+        isCancelablePhase,
+      );
       if (!target) {
         await logWarn(denops, "[vinsert] No session in progress.");
         return;
@@ -142,7 +148,7 @@ export function main(denops: Denops): void {
       await cancelRecording(denops, target.id);
     },
     async retry(): Promise<void> {
-      if (getRecordingSession()) {
+      if (registryGetRecordingSession(sessionRegistry)) {
         await logWarn(
           denops,
           "[vinsert] Recording is already in progress.",
@@ -163,7 +169,7 @@ export function main(denops: Denops): void {
         capture.session.mode,
         cloneRuntimeConfig(capture.session.config),
       );
-      sessions.set(sessionId, session);
+      sessionRegistry.sessions.set(sessionId, session);
       if (session.mode === "insert") {
         const anchor = await createInsertAnchor(denops);
         session.insertAnchor = anchor;
@@ -179,7 +185,7 @@ export function main(denops: Denops): void {
       session.resolvedText = "";
       session.scratchHandle = null;
       try {
-        await focusSession(denops, sessionId);
+        await focusSessionWithDeps(denops, sessionId);
       } catch {
         // ignore focus errors before retrying
       }
@@ -212,7 +218,7 @@ async function beginRecording(denops: Denops, rawMode: unknown): Promise<void> {
   const mode = toMode(rawMode);
   const sessionId = generateSessionId();
   const session = createSessionContext(sessionId, mode, config);
-  sessions.set(sessionId, session);
+  sessionRegistry.sessions.set(sessionId, session);
   try {
     await logInfo(
       denops,
@@ -222,7 +228,7 @@ async function beginRecording(denops: Denops, rawMode: unknown): Promise<void> {
     session.insertAnchor = anchor;
     session.indicatorAnchor = { bufnr: anchor.bufnr, row: anchor.row };
     await initializeSessionReservationMark(denops, session);
-    await focusSession(denops, sessionId);
+    await focusSessionWithDeps(denops, sessionId);
     session.recorder = await startRecording(denops, config);
     session.resolvedText = "";
     session.reservation = null;
@@ -240,7 +246,7 @@ async function finishRecording(
   denops: Denops,
   sessionId: SessionId,
 ): Promise<void> {
-  const session = sessions.get(sessionId);
+  const session = sessionRegistry.sessions.get(sessionId);
   if (!session) {
     return;
   }
@@ -291,7 +297,7 @@ async function handlePipelineError(
   if (session.canceled || isAbortError(error)) {
     return;
   }
-  const context = sessions.get(sessionId);
+  const context = sessionRegistry.sessions.get(sessionId);
   if (context) {
     await updateSessionPhase(denops, sessionId, "error");
   }
@@ -315,7 +321,7 @@ async function cancelRecording(
   denops: Denops,
   sessionId: SessionId,
 ): Promise<void> {
-  const session = sessions.get(sessionId);
+  const session = sessionRegistry.sessions.get(sessionId);
   if (!session) {
     await logWarn(denops, "[vinsert] Recording is not active.");
     return;
@@ -354,7 +360,7 @@ async function handleSessionDelta(
   delta: string,
 ): Promise<void> {
   if (!delta) return;
-  const session = sessions.get(sessionId);
+  const session = sessionRegistry.sessions.get(sessionId);
   if (!session || session.canceled) return;
   if (session.mode === "insert" && session.reservation) {
     await syncSessionAnchors(denops, session);
@@ -410,201 +416,15 @@ async function createInsertAnchor(denops: Denops): Promise<AnchorPosition> {
   };
 }
 
-async function ensureReservationNamespace(denops: Denops): Promise<number> {
-  if (reservationNamespace !== null) {
-    return reservationNamespace;
-  }
-  reservationNamespace = ensure(
-    await nvimFn.nvim_create_namespace(denops, "vinsert.session"),
-    is.Number,
-  );
-  return reservationNamespace;
-}
-
-async function syncSessionAnchors(
-  denops: Denops,
-  session: SessionContext,
-): Promise<void> {
-  if (!session.insertAnchor || session.reservationMarkId === null) {
-    return;
-  }
-  const ns = await ensureReservationNamespace(denops);
-  try {
-    const position = ensure(
-      await nvimFn.nvim_buf_get_extmark_by_id(
-        denops,
-        session.insertAnchor.bufnr,
-        ns,
-        session.reservationMarkId,
-        {},
-      ),
-      is.ArrayOf(is.Number),
-    );
-    if (position.length < 2) {
-      return;
-    }
-    const [markRow, markCol] = position;
-    const previous = session.insertAnchor;
-    if (markRow === previous.row && markCol === previous.col) {
-      return;
-    }
-    const rowDiff = markRow - previous.row;
-    const colDiff = markCol - previous.col;
-    session.insertAnchor = {
-      bufnr: previous.bufnr,
-      row: markRow,
-      col: markCol,
-    };
-    session.indicatorAnchor = {
-      bufnr: previous.bufnr,
-      row: markRow,
-    };
-    if (session.reservation) {
-      const updatedReservation = {
-        ...session.reservation,
-        startRow: markRow,
-        startCol: markCol,
-        endRow: session.reservation.endRow + rowDiff,
-        endCol: session.reservation.endCol +
-          (rowDiff === 0 ? colDiff : 0),
-      };
-      const sanitized = await sanitizeReservation(
-        denops,
-        updatedReservation,
-        false,
-      );
-      Object.assign(session.reservation, sanitized);
-    }
-  } catch {
-    // ignore extmark lookup failures
-  }
-}
-
-async function initializeSessionReservationMark(
-  denops: Denops,
-  session: SessionContext,
-): Promise<void> {
-  if (!session.insertAnchor) {
-    return;
-  }
-  const ns = await ensureReservationNamespace(denops);
-  const options: Record<string, unknown> = {
-    right_gravity: true,
-  };
-  if (session.reservationMarkId !== null) {
-    options.id = session.reservationMarkId;
-  }
-  session.reservationMarkId = ensure(
-    await nvimFn.nvim_buf_set_extmark(
-      denops,
-      session.insertAnchor.bufnr,
-      ns,
-      session.insertAnchor.row,
-      session.insertAnchor.col,
-      options,
-    ),
-    is.Number,
-  );
-}
-
-async function ensureSessionInsertReservation(
-  denops: Denops,
-  session: SessionContext,
-): Promise<InsertReservation> {
-  if (!session.insertAnchor) {
-    const fallback = await reserveInsertRange(denops);
-    session.insertAnchor = {
-      bufnr: fallback.bufnr,
-      row: fallback.startRow,
-      col: fallback.startCol,
-    };
-    session.indicatorAnchor = {
-      bufnr: fallback.bufnr,
-      row: fallback.startRow,
-    };
-    await initializeSessionReservationMark(denops, session);
-    return fallback;
-  }
-  await initializeSessionReservationMark(denops, session);
-  const ns = await ensureReservationNamespace(denops);
-  const bufnr = session.insertAnchor.bufnr;
-  const isNumberArray = is.ArrayOf(is.Number);
-  let rawPosition = await nvimFn.nvim_buf_get_extmark_by_id(
-    denops,
-    bufnr,
-    ns,
-    session.reservationMarkId,
-    {},
-  );
-  let position = isNumberArray(rawPosition) ? rawPosition : [];
-  if (position.length < 2) {
-    session.reservationMarkId = ensure(
-      await nvimFn.nvim_buf_set_extmark(
-        denops,
-        bufnr,
-        ns,
-        session.insertAnchor.row,
-        session.insertAnchor.col,
-        {
-          right_gravity: true,
-        },
-      ),
-      is.Number,
-    );
-    rawPosition = await nvimFn.nvim_buf_get_extmark_by_id(
-      denops,
-      bufnr,
-      ns,
-      session.reservationMarkId,
-      {},
-    );
-    position = isNumberArray(rawPosition) ? rawPosition : [];
-  }
-  if (position.length < 2) {
-    position = [session.insertAnchor.row, session.insertAnchor.col];
-  }
-  const [markRow, markCol] = position;
-  const sanitized = await sanitizeReservation(denops, {
-    bufnr,
-    startRow: markRow,
-    startCol: markCol,
-    endRow: markRow,
-    endCol: markCol,
-  }, false);
-  session.reservationMarkId = ensure(
-    await nvimFn.nvim_buf_set_extmark(
-      denops,
-      bufnr,
-      ns,
-      sanitized.startRow,
-      sanitized.startCol,
-      {
-        right_gravity: true,
-        ...(session.reservationMarkId !== null
-          ? { id: session.reservationMarkId }
-          : {}),
-      },
-    ),
-    is.Number,
-  );
-  session.insertAnchor = {
-    bufnr: sanitized.bufnr,
-    row: sanitized.startRow,
-    col: sanitized.startCol,
-  };
-  session.indicatorAnchor = {
-    bufnr: sanitized.bufnr,
-    row: sanitized.startRow,
-  };
-  return sanitized;
-}
-
 async function cleanupSession(
   denops: Denops,
   sessionId: SessionId,
 ): Promise<void> {
-  const session = sessions.get(sessionId);
-  sessions.delete(sessionId);
+  const session = sessionRegistry.sessions.get(sessionId);
+  sessionRegistry.sessions.delete(sessionId);
+  if (sessionRegistry.activeSessionId === sessionId) {
+    sessionRegistry.activeSessionId = null;
+  }
   if (session && session.reservationMarkId !== null && session.insertAnchor) {
     const ns = await ensureReservationNamespace(denops);
     await nvimFn.nvim_buf_del_extmark(
@@ -614,28 +434,29 @@ async function cleanupSession(
       session.reservationMarkId,
     ).catch(() => {});
   }
-  const nextActiveId = selectNextActiveSession(sessions, sessionId);
+  const nextActiveId = selectNextActiveSession(
+    sessionRegistry.sessions,
+    sessionId,
+  );
   if (nextActiveId) {
-    await focusSession(denops, nextActiveId);
+    await focusSessionWithDeps(denops, nextActiveId);
     return;
   }
-  activeSessionId = null;
+  sessionRegistry.activeSessionId = null;
   const config = await loadConfig(denops);
   await setPhase(denops, "idle", config);
 }
 
-async function focusSession(
+async function focusSessionWithDeps(
   denops: Denops,
   sessionId: SessionId,
 ): Promise<void> {
-  activeSessionId = sessionId;
-  const session = sessions.get(sessionId);
-  if (!session) return;
-  await syncSessionAnchors(denops, session);
-  if (session.indicatorAnchor) {
-    setIndicatorAnchor(session.indicatorAnchor);
-  }
-  await setPhase(denops, toIndicatorPhase(session.phase), session.config);
+  await focusSessionRegistry(denops, sessionRegistry, sessionId, {
+    syncSessionAnchors,
+    setIndicatorAnchor,
+    setPhase,
+    toIndicatorPhase,
+  });
 }
 
 async function updateSessionPhase(
@@ -643,7 +464,7 @@ async function updateSessionPhase(
   sessionId: SessionId,
   phase: StatusPhase,
 ): Promise<void> {
-  const session = sessions.get(sessionId);
+  const session = sessionRegistry.sessions.get(sessionId);
   if (!session) return;
   session.phase = phase;
   await syncSessionAnchors(denops, session);
@@ -651,38 +472,9 @@ async function updateSessionPhase(
     // keep anchor in sync when sanitized values shift
     setIndicatorAnchor(session.indicatorAnchor);
   }
-  if (isLatestSession(activeSessionId, sessionId)) {
+  if (isLatestSession(sessionRegistry.activeSessionId, sessionId)) {
     await setPhase(denops, toIndicatorPhase(phase), session.config);
   }
-}
-
-function getActiveSession(): SessionContext | null {
-  if (!activeSessionId) {
-    return null;
-  }
-  return sessions.get(activeSessionId) ?? null;
-}
-
-function getRecordingSession(): SessionContext | null {
-  for (const session of sessions.values()) {
-    if (session.phase === "recording") {
-      return session;
-    }
-  }
-  return null;
-}
-
-function getCancelableSession(): SessionContext | null {
-  const active = getActiveSession();
-  if (active && isCancelablePhase(active.phase)) {
-    return active;
-  }
-  for (const session of sessions.values()) {
-    if (isCancelablePhase(session.phase)) {
-      return session;
-    }
-  }
-  return null;
 }
 
 function isCancelablePhase(phase: StatusPhase): boolean {
