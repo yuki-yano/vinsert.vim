@@ -49,10 +49,7 @@ export async function appendScratch(
 ): Promise<void> {
   const lines = splitLines(text);
   if (lines.length === 0) return;
-  const currentLines = ensure(
-    await nvimFn.nvim_buf_get_lines(denops, handle.bufnr, 0, -1, true),
-    is.ArrayOf(is.String),
-  );
+  const currentLines = await buffer.get(denops, handle.bufnr);
   if (currentLines.length === 1 && currentLines[0] === "") {
     await replaceScratch(denops, handle, lines.join("\n"));
     return;
