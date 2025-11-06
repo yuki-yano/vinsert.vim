@@ -33,10 +33,10 @@ import {
 import { type PipelineDeps, runSessionPipeline } from "./pipeline.ts";
 import {
   createSessionRegistry,
-  focusSession as focusSessionRegistry,
-  getActiveSession as registryGetActiveSession,
-  getCancelableSession as registryGetCancelableSession,
-  getRecordingSession as registryGetRecordingSession,
+  focusSession,
+  getActiveSession,
+  getCancelableSession,
+  getRecordingSession,
 } from "./session_manager.ts";
 import {
   ensureReservationNamespace,
@@ -70,7 +70,7 @@ function createPipelineDeps(): PipelineDeps {
 export function main(denops: Denops): void {
   denops.dispatcher = {
     async toggle(mode?: unknown): Promise<void> {
-      const recording = registryGetRecordingSession(sessionRegistry);
+      const recording = getRecordingSession(sessionRegistry);
       if (!recording) {
         await logInfo(denops, "[vinsert] toggle: begin recording").catch(
           () => {},
@@ -84,7 +84,7 @@ export function main(denops: Denops): void {
       await finishRecording(denops, recording.id);
     },
     async start(mode?: unknown): Promise<void> {
-      if (registryGetRecordingSession(sessionRegistry)) {
+      if (getRecordingSession(sessionRegistry)) {
         await logWarn(
           denops,
           "[vinsert] Recording is already in progress.",
@@ -95,7 +95,7 @@ export function main(denops: Denops): void {
       await beginRecording(denops, mode);
     },
     async stop(): Promise<void> {
-      const recording = registryGetRecordingSession(sessionRegistry);
+      const recording = getRecordingSession(sessionRegistry);
       if (!recording) {
         await logWarn(denops, "[vinsert] Recording is not active.");
         return;
@@ -104,7 +104,7 @@ export function main(denops: Denops): void {
       await finishRecording(denops, recording.id);
     },
     async status(): Promise<void> {
-      const active = registryGetActiveSession(sessionRegistry);
+      const active = getActiveSession(sessionRegistry);
       const phase = active?.phase ?? "idle";
       const mode = active?.mode ?? "insert";
       const id = active?.id ?? "-";
@@ -114,14 +114,14 @@ export function main(denops: Denops): void {
       );
     },
     status_info(): Record<string, unknown> {
-      const active = registryGetActiveSession(sessionRegistry);
+      const active = getActiveSession(sessionRegistry);
       return buildStatusSnapshot(
         active?.phase ?? "idle",
         active?.mode ?? "insert",
       );
     },
     async refresh_indicator(): Promise<void> {
-      const active = registryGetActiveSession(sessionRegistry);
+      const active = getActiveSession(sessionRegistry);
       if (!active) {
         return;
       }
@@ -137,7 +137,7 @@ export function main(denops: Denops): void {
       }
     },
     async cancel(): Promise<void> {
-      const target = registryGetCancelableSession(
+      const target = getCancelableSession(
         sessionRegistry,
         isCancelablePhase,
       );
@@ -148,7 +148,7 @@ export function main(denops: Denops): void {
       await cancelRecording(denops, target.id);
     },
     async retry(): Promise<void> {
-      if (registryGetRecordingSession(sessionRegistry)) {
+      if (getRecordingSession(sessionRegistry)) {
         await logWarn(
           denops,
           "[vinsert] Recording is already in progress.",
@@ -451,7 +451,7 @@ async function focusSessionWithDeps(
   denops: Denops,
   sessionId: SessionId,
 ): Promise<void> {
-  await focusSessionRegistry(denops, sessionRegistry, sessionId, {
+  await focusSession(denops, sessionRegistry, sessionId, {
     syncSessionAnchors,
     setIndicatorAnchor,
     setPhase,
