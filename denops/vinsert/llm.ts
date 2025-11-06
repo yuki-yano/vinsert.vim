@@ -92,7 +92,7 @@ export async function streamGenerate(
       ...requestOptions,
       ...(shouldStream ? { stream: true } : {}),
       input: [
-        { role: "system", content: options.config.systemPrompt },
+        { role: "developer", content: options.config.systemPrompt },
         { role: "user", content: prompt },
       ],
     }),
