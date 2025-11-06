@@ -104,10 +104,13 @@ export function main(denops: Denops): void {
       await recordingController.finishRecording(denops, activeRecording.id);
     },
     async start(mode?: unknown): Promise<void> {
-      if (getRecordingSession(sessionRegistry)) {
+      if (
+        getRecordingSession(sessionRegistry) ||
+        getCancelableSession(sessionRegistry, isCancelablePhase)
+      ) {
         await logWarn(
           denops,
-          "[vinsert] Recording is already in progress.",
+          "[vinsert] Another session is still running.",
         );
         return;
       }
