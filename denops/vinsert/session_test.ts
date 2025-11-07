@@ -45,6 +45,8 @@ Deno.test("createSessionContext initializes defaults", () => {
   assertEquals(session.mode, "insert");
   assertEquals(session.phase, "idle");
   assertEquals(session.resolvedText, "");
+  assertEquals(session.segmentIndex, 1);
+  assertEquals(session.segments.length, 0);
   assert(
     session.startedAt > 0,
     "startedAt should be positive timestamp",

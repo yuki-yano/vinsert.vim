@@ -11,6 +11,11 @@ export type GenerateOptions = {
   signal?: AbortSignal;
 };
 
+export type PromptMessage = {
+  role: "developer" | "user";
+  content: string;
+};
+
 type ResponseError = { message?: string };
 type ResponseStreamChunk = {
   type?: string;
@@ -72,7 +77,7 @@ const isResponseOutputItem = is.ObjectOf({
 }) satisfies Predicate<ResponseOutputItem>;
 
 export async function streamGenerate(
-  prompt: string,
+  messages: PromptMessage[],
   options: GenerateOptions,
 ): Promise<void> {
   const requestOptions = {
@@ -91,10 +96,7 @@ export async function streamGenerate(
     body: JSON.stringify({
       ...requestOptions,
       ...(shouldStream ? { stream: true } : {}),
-      input: [
-        { role: "developer", content: options.config.systemPrompt },
-        { role: "user", content: prompt },
-      ],
+      input: messages,
     }),
     signal: options.signal,
   });

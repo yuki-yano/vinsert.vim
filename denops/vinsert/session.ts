@@ -7,6 +7,14 @@ import type { StatusMode, StatusPhase } from "./status.ts";
 export type IndicatorAnchor = { bufnr: number; row: number } | null;
 export type InsertAnchor = { bufnr: number; row: number; col: number } | null;
 
+export type SegmentRecord = {
+  id: string;
+  audioPath: string;
+  audioData: Uint8Array;
+  transcript: string | null;
+  promptText: string | null;
+};
+
 export type SessionContext = {
   id: string;
   mode: StatusMode;
@@ -24,6 +32,8 @@ export type SessionContext = {
   flushPromise: Promise<void>;
   startedAt: number;
   config: RuntimeConfig;
+  segments: SegmentRecord[];
+  segmentIndex: number;
 };
 
 export function createSessionContext(
@@ -48,6 +58,8 @@ export function createSessionContext(
     flushPromise: Promise.resolve(),
     startedAt: Date.now(),
     config,
+    segments: [],
+    segmentIndex: 1,
   };
 }
 

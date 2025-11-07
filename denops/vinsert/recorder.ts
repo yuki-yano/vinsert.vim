@@ -9,6 +9,11 @@ export type RecorderHandle = {
   stderrPromise?: Promise<Uint8Array[]>;
 };
 
+export type RecorderResult = {
+  audioData: Uint8Array;
+  filepath: string;
+};
+
 const encoder = new TextEncoder();
 const decoder = new TextDecoder();
 
@@ -49,8 +54,7 @@ export async function startRecording(
 export async function stopRecording(
   denops: Denops,
   handle: RecorderHandle | null,
-  keepAudio: boolean,
-): Promise<Uint8Array> {
+): Promise<RecorderResult> {
   if (!handle) {
     throw new Error("Recorder is not active");
   }
@@ -75,14 +79,17 @@ export async function stopRecording(
     throw new Error(`ffmpeg exited with code ${status.code}: ${stderrText}`);
   }
   const wav = await Deno.readFile(filepath);
-  if (!keepAudio) {
-    try {
-      await Deno.remove(filepath);
-    } catch {
-      // ignore cleanup error
-    }
+  return { audioData: wav, filepath };
+}
+
+export async function deleteRecordingFile(
+  filepath: string,
+): Promise<void> {
+  try {
+    await Deno.remove(filepath);
+  } catch {
+    // ignore cleanup error
   }
-  return wav;
 }
 
 function concatenate(chunks: Uint8Array[]): Uint8Array {

@@ -69,7 +69,10 @@ vim.g.vinsert_always_yank = false -- set true to always copy the final text into
 - Set `g:vinsert_always_yank = true` if you want to copy the final text to the
   unnamed register regardless of the selected mode.
 - `:VinsertStatus`: print current phase and mode.
-- `:VinsertStop`: abort recording if something goes wrong.
+- `:VinsertStop`: finish the current recording and run transcription +
+  generation (normal completion). Use `:VinsertCancel` if you need to abort.
+- `:VinsertNextSegment`: finalize the current audio chunk and immediately start
+  the next recording. Stack multiple prompts this way before running the LLM.
 - `:VinsertCancel`: stop recording immediately without running transcription or
   generation.
 - `:VinsertRetry`: re-run transcription and generation for the most recent audio
@@ -179,6 +182,22 @@ breaks. Override it if you need a different tone:
 
 ```lua
 vim.g.vinsert_system_prompt = [[Please rewrite the transcript as bullet points in English.]]
+```
+
+You can also define per-segment transformers to post-process each audio prompt
+before sending it to the LLM. The first function handles the first segment, the
+second handles the next, and so on. Missing entries fall back to the original
+transcript.
+
+```lua
+vim.g.vinsert_prompt_segment_transformers = {
+  function(text)
+    return text
+  end,
+  function(text)
+    return "Summarise in English:\n" .. text
+  end,
+}
 ```
 
 ### Debug logging

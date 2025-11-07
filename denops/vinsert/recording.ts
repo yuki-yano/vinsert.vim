@@ -1,10 +1,14 @@
 import type { Denops } from "./deps/denops.ts";
 import type { RuntimeConfig } from "./config.ts";
 import type { StatusMode, StatusPhase } from "./status.ts";
-import type { SessionContext } from "./session.ts";
+import type { SegmentRecord, SessionContext } from "./session.ts";
 import type { PipelineDeps } from "./pipeline.ts";
 import type { SessionId, SessionRegistry } from "./session_manager.ts";
-import { startRecording, stopRecording } from "./recorder.ts";
+import {
+  deleteRecordingFile,
+  startRecording,
+  stopRecording,
+} from "./recorder.ts";
 
 export type RecordingDeps = {
   sessionRegistry: SessionRegistry;
@@ -34,7 +38,6 @@ export type RecordingDeps = {
     denops: Denops,
     sessionId: SessionId,
     session: SessionContext,
-    wav: Uint8Array,
     apiKey: string,
     source: "finishRecording" | "retry",
     deps: PipelineDeps,
@@ -57,6 +60,7 @@ export type RecordingDeps = {
 export type RecordingController = {
   beginRecording: (denops: Denops, rawMode: unknown) => Promise<void>;
   finishRecording: (denops: Denops, sessionId: SessionId) => Promise<void>;
+  nextSegment: (denops: Denops, sessionId: SessionId) => Promise<void>;
   cancelRecording: (denops: Denops, sessionId: SessionId) => Promise<void>;
   handlePipelineError: (
     denops: Denops,
@@ -89,10 +93,12 @@ export function createRecordingController(
       session.indicatorAnchor = { bufnr: anchor.bufnr, row: anchor.row };
       await deps.initializeSessionReservationMark(denops, session);
       await deps.focusSession(denops, sessionId);
-      session.recorder = await startRecording(denops, config);
+      await startRecorder(denops, session);
       session.resolvedText = "";
       session.reservation = null;
       session.scratchHandle = null;
+      session.segments = [];
+      session.segmentIndex = 1;
       await deps.updateSessionPhase(denops, sessionId, "recording");
       await deps.logInfo(denops, "[vinsert] Recording started.");
     } catch (error) {
@@ -111,30 +117,30 @@ export function createRecordingController(
       return;
     }
     const apiKey = await deps.resolveApiKey(denops);
+    let removeFiles = !session.config.keepAudio;
     try {
-      if (!session.recorder) {
-        throw new Error("Recorder handle is missing.");
+      if (!session.recorder && session.segments.length === 0) {
+        throw new Error("No recording in progress.");
       }
-      const wav = await stopRecording(
-        denops,
-        session.recorder,
-        session.config.keepAudio,
-      );
-      session.recorder = null;
+      if (session.recorder) {
+        await finalizeActiveRecording(denops, session, {
+          continueRecording: false,
+        });
+      }
       await deps.logInfo(
         denops,
-        `[vinsert] finishRecording: wav size=${wav.length} bytes`,
+        `[vinsert] finishRecording: segments=${session.segments.length}`,
       );
       await deps.runSessionPipeline(
         denops,
         sessionId,
         session,
-        wav,
         apiKey,
         "finishRecording",
         deps.createPipelineDeps(),
       );
     } catch (error) {
+      removeFiles = true;
       await handlePipelineError(
         denops,
         sessionId,
@@ -142,6 +148,41 @@ export function createRecordingController(
         error,
         "finishRecording",
       );
+      return;
+    } finally {
+      await cleanupSegments(denops, session, removeFiles);
+    }
+  }
+
+  async function nextSegment(
+    denops: Denops,
+    sessionId: SessionId,
+  ): Promise<void> {
+    const session = deps.sessionRegistry.sessions.get(sessionId);
+    if (!session) {
+      return;
+    }
+    if (session.phase !== "recording" || !session.recorder) {
+      await deps.logWarn(
+        denops,
+        "[vinsert] nextSegment: recording is not active.",
+      );
+      return;
+    }
+    try {
+      await finalizeActiveRecording(denops, session, {
+        continueRecording: true,
+      });
+      await deps.updateSessionPhase(denops, sessionId, "recording");
+      await deps.logInfo(
+        denops,
+        `[vinsert] nextSegment: segments=${session.segments.length}`,
+      );
+    } catch (error) {
+      await deps.logError(denops, "[vinsert] nextSegment: failed", error);
+      await deps.updateSessionPhase(denops, sessionId, "error");
+      await cleanupSegments(denops, session, true);
+      await deps.cleanupSession(denops, sessionId);
     }
   }
 
@@ -192,7 +233,9 @@ export function createRecordingController(
     );
     try {
       if (session.recorder) {
-        await stopRecording(denops, session.recorder, session.config.keepAudio);
+        const result = await stopRecording(denops, session.recorder);
+        await deleteRecordingFile(result.filepath);
+        session.recorder = null;
       }
     } catch (error) {
       await deps.logError(
@@ -211,6 +254,7 @@ export function createRecordingController(
       session.sttController = null;
       session.genController = null;
       session.canceled = true;
+      await cleanupSegments(denops, session, true);
       await deps.updateSessionPhase(denops, sessionId, "idle");
       await deps.emitCompletionEvent(denops, session.mode, false, "", "");
       await deps.cleanupSession(denops, sessionId);
@@ -218,9 +262,80 @@ export function createRecordingController(
     }
   }
 
+  async function finalizeActiveRecording(
+    denops: Denops,
+    session: SessionContext,
+    options: { continueRecording: boolean },
+  ): Promise<void> {
+    const segment = await captureSegment(denops, session);
+    session.segments.push(segment);
+    session.segmentIndex = session.segments.length;
+    if (options.continueRecording) {
+      await startRecorder(denops, session);
+      session.segmentIndex = session.segments.length + 1;
+    }
+  }
+
+  async function captureSegment(
+    denops: Denops,
+    session: SessionContext,
+  ): Promise<SegmentRecord> {
+    if (!session.recorder) {
+      throw new Error("Recorder handle is missing.");
+    }
+    const result = await stopRecording(denops, session.recorder);
+    session.recorder = null;
+    await deps.logInfo(
+      denops,
+      `[vinsert] segment captured: bytes=${result.audioData.length}`,
+    );
+    return {
+      id: crypto.randomUUID(),
+      audioPath: result.filepath,
+      audioData: result.audioData,
+      transcript: null,
+      promptText: null,
+    };
+  }
+
+  async function startRecorder(
+    denops: Denops,
+    session: SessionContext,
+  ): Promise<void> {
+    session.recorder = await startRecording(denops, session.config);
+  }
+
+  async function cleanupSegments(
+    denops: Denops,
+    session: SessionContext,
+    removeFiles: boolean,
+  ): Promise<void> {
+    if (removeFiles) {
+      await Promise.allSettled(
+        session.segments.map(async (segment) => {
+          if (segment.audioPath) {
+            await deleteRecordingFile(segment.audioPath);
+          }
+        }),
+      );
+    } else {
+      for (const segment of session.segments) {
+        if (segment.audioPath) {
+          await deps.logInfo(
+            denops,
+            `[vinsert] audio kept at ${segment.audioPath}`,
+          ).catch(() => {});
+        }
+      }
+    }
+    session.segments = [];
+    session.segmentIndex = 1;
+  }
+
   return {
     beginRecording,
     finishRecording,
+    nextSegment,
     cancelRecording,
     handlePipelineError,
   };

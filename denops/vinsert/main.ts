@@ -21,6 +21,7 @@ import {
   createSessionContext,
   generateSessionId,
   isLatestSession,
+  type SegmentRecord,
   selectNextActiveSession,
 } from "./session.ts";
 import {
@@ -126,6 +127,14 @@ export function main(denops: Denops): void {
       await logInfo(denops, "[vinsert] stop: finish recording");
       await recordingController.finishRecording(denops, activeRecording.id);
     },
+    async next_segment(): Promise<void> {
+      const activeRecording = getRecordingSession(sessionRegistry);
+      if (!activeRecording) {
+        await logWarn(denops, "[vinsert] Recording is not active.");
+        return;
+      }
+      await recordingController.nextSegment(denops, activeRecording.id);
+    },
     async status(): Promise<void> {
       const active = getActiveSession(sessionRegistry);
       const phase = active?.phase ?? "idle";
@@ -141,6 +150,7 @@ export function main(denops: Denops): void {
       return buildStatusSnapshot(
         active?.phase ?? "idle",
         active?.mode ?? "insert",
+        active?.segmentIndex ?? 1,
       );
     },
     async refresh_indicator(): Promise<void> {
@@ -186,6 +196,13 @@ export function main(denops: Denops): void {
         );
         return;
       }
+      if (!capture.wav || capture.wav.length === 0) {
+        await logWarn(
+          denops,
+          "[vinsert] The previous session cannot be retried.",
+        );
+        return;
+      }
       const sessionId = generateSessionId();
       const session = createSessionContext(
         sessionId,
@@ -193,6 +210,15 @@ export function main(denops: Denops): void {
         cloneRuntimeConfig(capture.session.config),
       );
       sessionRegistry.sessions.set(sessionId, session);
+      const retrySegment: SegmentRecord = {
+        id: crypto.randomUUID(),
+        audioPath: "",
+        audioData: capture.wav.slice(),
+        transcript: null,
+        promptText: null,
+      };
+      session.segments = [retrySegment];
+      session.segmentIndex = 1;
       if (session.mode === "insert") {
         const anchor = await createInsertAnchor(denops);
         session.insertAnchor = anchor;
@@ -218,7 +244,6 @@ export function main(denops: Denops): void {
           denops,
           sessionId,
           session,
-          capture.wav.slice(),
           apiKey,
           "retry",
           createPipelineDeps(),
@@ -355,7 +380,9 @@ async function updateSessionPhase(
     setIndicatorAnchor(session.indicatorAnchor);
   }
   if (isLatestSession(sessionRegistry.activeSessionId, sessionId)) {
-    await setPhase(denops, toIndicatorPhase(phase), session.config);
+    await setPhase(denops, toIndicatorPhase(phase), session.config, {
+      segmentIndex: session.segmentIndex,
+    });
   }
 }
 

@@ -7,7 +7,7 @@ import type {
 import type { InsertReservation } from "./buffer.ts";
 
 export type LastCapture = {
-  wav: Uint8Array;
+  wav: Uint8Array | null;
   session: {
     config: RuntimeConfig;
     mode: SessionContext["mode"];
@@ -24,10 +24,10 @@ export type LastCapture = {
 export function createLastCaptureRecord(
   session: SessionContext,
   transcript: string,
-  wav: Uint8Array,
+  wav: Uint8Array | null,
 ): LastCapture {
   return {
-    wav: wav.slice(),
+    wav: wav ? wav.slice() : null,
     session: {
       config: cloneRuntimeConfig(session.config),
       mode: session.mode,
