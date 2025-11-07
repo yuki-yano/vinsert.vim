@@ -140,7 +140,11 @@ async function renderIndicator(
     virtState = null;
   }
   const displayLabel = phase === "rec"
-    ? (currentRecordingLabel ?? formatRecordingLabel(currentSegmentIndex, true))
+    ? formatRecordingLabel(
+      currentSegmentIndex,
+      true,
+      currentRecordingLabel ?? undefined,
+    )
     : VIRT_LABELS[phase];
   const virtText = buildVirtText(
     phase,
@@ -223,8 +227,13 @@ export function indicatorLabel(phase: IndicatorPhase): string {
 function formatRecordingLabel(
   segmentIndex: number,
   filled: boolean,
+  custom?: string,
 ): string {
-  const suffix = segmentIndex >= 2 ? `REC (${segmentIndex})` : "REC";
+  const suffix = custom && custom.length > 0
+    ? custom
+    : segmentIndex >= 2
+    ? `REC (${segmentIndex})`
+    : "REC";
   const bullet = filled ? "●" : "○";
   return `${bullet} ${suffix}`;
 }
@@ -242,8 +251,11 @@ function startBlink(
   blinkTimer = setInterval(async () => {
     blinkToggle = !blinkToggle;
     if (!virtState) return;
-    const label = currentRecordingLabel ??
-      formatRecordingLabel(segmentIndex, !blinkToggle);
+    const label = formatRecordingLabel(
+      segmentIndex,
+      !blinkToggle,
+      currentRecordingLabel ?? undefined,
+    );
     if (virtState.bufnr === bufnr) {
       try {
         const position = ensure(
