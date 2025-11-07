@@ -46,14 +46,21 @@ function! vinsert#prompt_segment_label(idx) abort
 endfunction
 
 function! vinsert#apply_prompt_segment_transformer(idx, text) abort
-  let l:item = s:prompt_segment_entry(a:idx)
-  let l:Fn = get(l:item, 'transformer', v:none)
-  if type(l:Fn) != v:t_func
+  try
+    let l:item = s:prompt_segment_entry(a:idx)
+    let l:Fn = get(l:item, 'transformer', v:none)
+    if type(l:Fn) != v:t_func
+      return a:text
+    endif
+    let l:result = call(l:Fn, [a:text])
+    if type(l:result) != v:t_string
+      throw printf('segment %d transformer returned non-string', a:idx + 1)
+    endif
+    return l:result
+  catch /.*/
+    call denops#notify('vinsert', 'log_warn', [
+          \ printf('[vinsert] prompt transformer %d failed: %s', a:idx + 1, v:exception)
+          \ ])
     return a:text
-  endif
-  let l:result = call(l:Fn, [a:text])
-  if type(l:result) != v:t_string
-    throw printf("segment %d transformer returned non-string", a:idx + 1)
-  endif
-  return l:result
+  endtry
 endfunction
