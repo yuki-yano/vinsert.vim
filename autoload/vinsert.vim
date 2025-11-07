@@ -48,7 +48,7 @@ endfunction
 function! vinsert#apply_prompt_segment_transformer(idx, text) abort
   try
     let l:item = s:prompt_segment_entry(a:idx)
-    let l:Fn = get(l:item, 'transformer', v:none)
+    let l:Fn = get(l:item, 'transformer', v:null)
     if type(l:Fn) != v:t_func
       return a:text
     endif
