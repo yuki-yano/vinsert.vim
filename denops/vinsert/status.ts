@@ -33,11 +33,14 @@ export function buildStatusSnapshot(
   phase: StatusPhase,
   mode: StatusMode,
   segmentIndex = 1,
+  segmentLabel?: string | null,
 ): StatusSnapshot {
   const indicatorPhase = toIndicatorPhase(phase);
   const normalizedIndex = Math.max(segmentIndex, 1);
   const label = indicatorPhase === "rec"
-    ? recordingLabel(normalizedIndex)
+    ? (segmentLabel && segmentLabel.length > 0
+      ? segmentLabel
+      : recordingLabel(normalizedIndex))
     : indicatorLabel(indicatorPhase);
   return {
     phase,

@@ -78,11 +78,13 @@ Deno.test("focusSession updates registry and invokes deps", async () => {
   const session = createSessionContext("focus", "insert", stubConfig());
   session.phase = "gen";
   session.indicatorAnchor = { bufnr: 1, row: 2 };
+  session.segmentLabel = null;
   registry.sessions.set(session.id, session);
   let synced = false;
   let anchorSet: unknown = null;
   const phaseArgs: string[] = [];
   const segmentArgs: number[] = [];
+  const labelArgs: Array<string | undefined> = [];
   await focusSession(
     {} as Denops,
     registry,
@@ -99,11 +101,12 @@ Deno.test("focusSession updates registry and invokes deps", async () => {
         _denops: Denops,
         phase: IndicatorPhase,
         _config: RuntimeConfig,
-        opts?: { segmentIndex?: number },
+        opts?: { segmentIndex?: number; label?: string },
       ): Promise<void> => {
         await Promise.resolve();
         phaseArgs.push(phase);
         segmentArgs.push(opts?.segmentIndex ?? 0);
+        labelArgs.push(opts?.label);
       },
       toIndicatorPhase: () => "gen",
     },
@@ -113,4 +116,5 @@ Deno.test("focusSession updates registry and invokes deps", async () => {
   assertEquals(anchorSet, session.indicatorAnchor);
   assertEquals(phaseArgs, ["gen"]);
   assertEquals(segmentArgs, [1]);
+  assertEquals(labelArgs, [undefined]);
 });

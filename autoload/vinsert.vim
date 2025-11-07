@@ -30,25 +30,30 @@ function! vinsert#statusline() abort
   return get(l:status, 'label', '')
 endfunction
 
-function! vinsert#apply_prompt_segment_transformer(idx, text) abort
-  let l:list = get(g:, 'vinsert_prompt_segment_transformers', [])
+function! s:prompt_segment_entry(idx) abort
+  let l:list = get(g:, 'vinsert_prompt_segments', [])
   if type(l:list) != v:t_list || a:idx < 0 || a:idx >= len(l:list)
+    return {}
+  endif
+  let l:item = l:list[a:idx]
+  return type(l:item) == v:t_dict ? l:item : {}
+endfunction
+
+function! vinsert#prompt_segment_label(idx) abort
+  let l:item = s:prompt_segment_entry(a:idx)
+  let l:label = get(l:item, 'label', '')
+  return type(l:label) == v:t_string ? l:label : ''
+endfunction
+
+function! vinsert#apply_prompt_segment_transformer(idx, text) abort
+  let l:item = s:prompt_segment_entry(a:idx)
+  let l:Fn = get(l:item, 'transformer', v:none)
+  if type(l:Fn) != v:t_func
     return a:text
   endif
-  let l:Fn = l:list[a:idx]
-  try
-    let l:result = call(l:Fn, [a:text])
-    if type(l:result) != v:t_string
-      call denops#notify('vinsert', 'log_warn', [
-            \ printf('[vinsert] prompt transformer %d returned non-string', a:idx + 1)
-            \ ])
-      return a:text
-    endif
-    return l:result
-  catch /.*/
-    call denops#notify('vinsert', 'log_warn', [
-          \ printf('[vinsert] prompt transformer %d failed: %s', a:idx + 1, v:exception)
-          \ ])
-    return a:text
-  endtry
+  let l:result = call(l:Fn, [a:text])
+  if type(l:result) != v:t_string
+    throw printf("segment %d transformer returned non-string", a:idx + 1)
+  endif
+  return l:result
 endfunction

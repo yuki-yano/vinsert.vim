@@ -9,6 +9,7 @@ import {
   startRecording,
   stopRecording,
 } from "./recorder.ts";
+import { is } from "./deps/unknownutil.ts";
 
 export type RecordingDeps = {
   sessionRegistry: SessionRegistry;
@@ -99,6 +100,10 @@ export function createRecordingController(
       session.scratchHandle = null;
       session.segments = [];
       session.segmentIndex = 1;
+      session.segmentLabel = await resolveSegmentLabel(
+        denops,
+        session.segmentIndex,
+      );
       await deps.updateSessionPhase(denops, sessionId, "recording");
       await deps.logInfo(denops, "[vinsert] Recording started.");
     } catch (error) {
@@ -273,6 +278,12 @@ export function createRecordingController(
     if (options.continueRecording) {
       await startRecorder(denops, session);
       session.segmentIndex = session.segments.length + 1;
+      session.segmentLabel = await resolveSegmentLabel(
+        denops,
+        session.segmentIndex,
+      );
+    } else {
+      session.segmentLabel = null;
     }
   }
 
@@ -330,6 +341,25 @@ export function createRecordingController(
     }
     session.segments = [];
     session.segmentIndex = 1;
+    session.segmentLabel = null;
+  }
+
+  async function resolveSegmentLabel(
+    denops: Denops,
+    segmentIndex: number,
+  ): Promise<string | null> {
+    try {
+      const raw = await denops.call(
+        "vinsert#prompt_segment_label",
+        Math.max(segmentIndex - 1, 0),
+      );
+      if (is.String(raw) && raw.length > 0) {
+        return raw;
+      }
+    } catch {
+      // ignore label resolution errors
+    }
+    return null;
   }
 
   return {

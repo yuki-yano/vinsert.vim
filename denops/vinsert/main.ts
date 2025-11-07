@@ -151,6 +151,7 @@ export function main(denops: Denops): void {
         active?.phase ?? "idle",
         active?.mode ?? "insert",
         active?.segmentIndex ?? 1,
+        active?.segmentLabel ?? null,
       );
     },
     async refresh_indicator(): Promise<void> {
@@ -382,6 +383,7 @@ async function updateSessionPhase(
   if (isLatestSession(sessionRegistry.activeSessionId, sessionId)) {
     await setPhase(denops, toIndicatorPhase(phase), session.config, {
       segmentIndex: session.segmentIndex,
+      label: session.segmentLabel ?? undefined,
     });
   }
 }

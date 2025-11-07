@@ -184,21 +184,30 @@ breaks. Override it if you need a different tone:
 vim.g.vinsert_system_prompt = [[Please rewrite the transcript as bullet points in English.]]
 ```
 
-You can also define per-segment transformers to post-process each audio prompt
-before sending it to the LLM. The first function handles the first segment, the
-second handles the next, and so on. Missing entries fall back to the original
-transcript.
+You can also describe each segment with a label and transformer pair via
+`vim.g.vinsert_prompt_segments`. The first table entry applies to the first
+recording chunk, the second entry to the next chunk, etc.
 
 ```lua
-vim.g.vinsert_prompt_segment_transformers = {
-  function(text)
-    return text
-  end,
-  function(text)
-    return "Summarise in English:\n" .. text
-  end,
+vim.g.vinsert_prompt_segments = {
+  {
+    label = "REC: Content",
+    transformer = function(text)
+      return ("CONTENT:\n\n%s"):format(text)
+    end,
+  },
+  {
+    label = "REC: Instructions",
+    transformer = function(text)
+      return ("INSTRUCTIONS:\n\n%s"):format(text)
+    end,
+  },
 }
 ```
+
+Labels are optional: when omitted, the indicator shows `REC` / `REC (n)` as
+before. Transformers are optional too—omitting them falls back to the original
+transcript for that segment.
 
 ### Debug logging
 

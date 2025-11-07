@@ -41,4 +41,8 @@ Deno.test("buildStatusSnapshot includes segment-aware labels", () => {
   const snapshot = buildStatusSnapshot("recording", "insert", 3);
   assertEquals(snapshot.label, "REC (3)");
   assertEquals(snapshot.segmentIndex, 3);
+
+  const custom = buildStatusSnapshot("recording", "insert", 2, "Rec: Content");
+  assertEquals(custom.label, "Rec: Content");
+  assertEquals(custom.segmentIndex, 2);
 });

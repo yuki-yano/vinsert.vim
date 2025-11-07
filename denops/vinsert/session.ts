@@ -34,6 +34,7 @@ export type SessionContext = {
   config: RuntimeConfig;
   segments: SegmentRecord[];
   segmentIndex: number;
+  segmentLabel: string | null;
 };
 
 export function createSessionContext(
@@ -60,6 +61,7 @@ export function createSessionContext(
     config,
     segments: [],
     segmentIndex: 1,
+    segmentLabel: null,
   };
 }
 

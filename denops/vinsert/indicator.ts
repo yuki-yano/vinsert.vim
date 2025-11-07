@@ -24,6 +24,7 @@ let anchor: { bufnr: number; row: number } | null = null;
 let currentPhase: IndicatorPhase = "idle";
 let lastConfig: RuntimeConfig | null = null;
 let currentSegmentIndex = 1;
+let currentRecordingLabel: string | null = null;
 
 export function setIndicatorAnchor(
   value: { bufnr: number; row: number } | null,
@@ -51,14 +52,16 @@ export async function setPhase(
   denops: Denops,
   phase: IndicatorPhase,
   config: RuntimeConfig,
-  options?: { segmentIndex?: number },
+  options?: { segmentIndex?: number; label?: string },
 ): Promise<void> {
   currentPhase = phase;
   lastConfig = config;
   if (phase === "rec") {
     currentSegmentIndex = Math.max(options?.segmentIndex ?? 1, 1);
+    currentRecordingLabel = options?.label ?? null;
   } else if (phase === "idle") {
     currentSegmentIndex = 1;
+    currentRecordingLabel = null;
   }
   if (config.indicatorMode !== "virt") {
     await removeIndicator(denops, true);
@@ -137,7 +140,7 @@ async function renderIndicator(
     virtState = null;
   }
   const displayLabel = phase === "rec"
-    ? formatRecordingLabel(currentSegmentIndex, true)
+    ? (currentRecordingLabel ?? formatRecordingLabel(currentSegmentIndex, true))
     : VIRT_LABELS[phase];
   const virtText = buildVirtText(
     phase,
@@ -174,6 +177,7 @@ async function renderIndicator(
     );
   } else {
     stopBlink();
+    currentRecordingLabel = null;
   }
 }
 
@@ -238,7 +242,8 @@ function startBlink(
   blinkTimer = setInterval(async () => {
     blinkToggle = !blinkToggle;
     if (!virtState) return;
-    const label = formatRecordingLabel(segmentIndex, !blinkToggle);
+    const label = currentRecordingLabel ??
+      formatRecordingLabel(segmentIndex, !blinkToggle);
     if (virtState.bufnr === bufnr) {
       try {
         const position = ensure(
