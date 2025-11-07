@@ -305,11 +305,12 @@ async function finalizeSessionRun(
   if (session.mode === "insert" && session.reservation) {
     await finalizeUndo(denops, session.reservation.bufnr);
   }
-  if (retryAudio) {
-    deps.setLastCapture(
-      createLastCaptureRecord(session, transcript, retryAudio),
-    );
-  }
+  const captureAudio = retryAudio && session.segments.length === 1
+    ? retryAudio
+    : null;
+  deps.setLastCapture(
+    createLastCaptureRecord(session, transcript, captureAudio),
+  );
   await logInfo(denops, "[vinsert] Generation finished.");
   await emitCompletionEvent(
     denops,

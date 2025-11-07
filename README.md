@@ -2,8 +2,9 @@
 
 `vinsert.vim` is a denops-based Neovim plugin that records audio on demand,
 transcribes it via OpenAI's `gpt-4o-transcribe`, and reformats the text with
-`gpt-5-mini`. Results are streamed live into the buffer, yanked into the unnamed
-register, or displayed in a scratch buffer depending on the selected mode.
+`gpt-5-mini`. Once recording finishes, the generated text is inserted into the
+buffer, yanked into the unnamed register, or displayed in a scratch buffer
+depending on the selected mode.
 
 ## Requirements
 
@@ -61,10 +62,11 @@ vim.g.vinsert_always_yank = false -- set true to always copy the final text into
 
 ## Usage
 
-- Insert mode `<C-q>` (default): toggle recording and stream into the buffer.
+- Insert mode `<C-q>` (default): toggle recording and insert the final text into
+  the buffer.
 - `:VinsertToggle yank`: record and store the final text in the unnamed register
   (buffer remains untouched).
-- `:VinsertToggle scratch`: show streaming output in a scratch buffer (filetype
+- `:VinsertToggle scratch`: show the final output in a scratch buffer (filetype
   `markdown.vinsert`).
 - Set `g:vinsert_always_yank = true` if you want to copy the final text to the
   unnamed register regardless of the selected mode.

@@ -145,7 +145,9 @@ export function createRecordingController(
         deps.createPipelineDeps(),
       );
     } catch (error) {
-      removeFiles = true;
+      if (!session.config.keepAudio) {
+        removeFiles = true;
+      }
       await handlePipelineError(
         denops,
         sessionId,
@@ -239,7 +241,14 @@ export function createRecordingController(
     try {
       if (session.recorder) {
         const result = await stopRecording(denops, session.recorder);
-        await deleteRecordingFile(result.filepath);
+        if (!session.config.keepAudio) {
+          await deleteRecordingFile(result.filepath);
+        } else {
+          await deps.logInfo(
+            denops,
+            `[vinsert] keep_audio=true, saved active segment at ${result.filepath}`,
+          );
+        }
         session.recorder = null;
       }
     } catch (error) {
@@ -259,7 +268,7 @@ export function createRecordingController(
       session.sttController = null;
       session.genController = null;
       session.canceled = true;
-      await cleanupSegments(denops, session, true);
+      await cleanupSegments(denops, session, !session.config.keepAudio);
       await deps.updateSessionPhase(denops, sessionId, "idle");
       await deps.emitCompletionEvent(denops, session.mode, false, "", "");
       await deps.cleanupSession(denops, sessionId);
