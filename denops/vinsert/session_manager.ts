@@ -68,6 +68,7 @@ export async function focusSession(
       denops: Denops,
       phase: IndicatorPhase,
       config: RuntimeConfig,
+      options?: { segmentIndex?: number; label?: string },
     ) => Promise<void>;
     toIndicatorPhase: (phase: StatusPhase) => IndicatorPhase;
   },
@@ -85,5 +86,9 @@ export async function focusSession(
     denops,
     deps.toIndicatorPhase(session.phase),
     session.config,
+    {
+      segmentIndex: session.segmentIndex,
+      label: session.segmentLabel ?? undefined,
+    },
   );
 }

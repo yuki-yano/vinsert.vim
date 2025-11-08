@@ -2,8 +2,9 @@
 
 `vinsert.vim` is a denops-based Neovim plugin that records audio on demand,
 transcribes it via OpenAI's `gpt-4o-transcribe`, and reformats the text with
-`gpt-5-mini`. Results are streamed live into the buffer, yanked into the unnamed
-register, or displayed in a scratch buffer depending on the selected mode.
+`gpt-5-mini`. Once recording finishes, the generated text is inserted into the
+buffer, yanked into the unnamed register, or displayed in a scratch buffer
+depending on the selected mode.
 
 ## Requirements
 
@@ -61,15 +62,19 @@ vim.g.vinsert_always_yank = false -- set true to always copy the final text into
 
 ## Usage
 
-- Insert mode `<C-q>` (default): toggle recording and stream into the buffer.
+- Insert mode `<C-q>` (default): toggle recording and insert the final text into
+  the buffer.
 - `:VinsertToggle yank`: record and store the final text in the unnamed register
   (buffer remains untouched).
-- `:VinsertToggle scratch`: show streaming output in a scratch buffer (filetype
+- `:VinsertToggle scratch`: show the final output in a scratch buffer (filetype
   `markdown.vinsert`).
 - Set `g:vinsert_always_yank = true` if you want to copy the final text to the
   unnamed register regardless of the selected mode.
 - `:VinsertStatus`: print current phase and mode.
-- `:VinsertStop`: abort recording if something goes wrong.
+- `:VinsertStop`: finish the current recording and run transcription +
+  generation (normal completion). Use `:VinsertCancel` if you need to abort.
+- `:VinsertNextSegment`: finalize the current audio chunk and immediately start
+  the next recording. Stack multiple prompts this way before running the LLM.
 - `:VinsertCancel`: stop recording immediately without running transcription or
   generation.
 - `:VinsertRetry`: re-run transcription and generation for the most recent audio
@@ -180,6 +185,31 @@ breaks. Override it if you need a different tone:
 ```lua
 vim.g.vinsert_system_prompt = [[Please rewrite the transcript as bullet points in English.]]
 ```
+
+You can also describe each segment with a label and transformer pair via
+`vim.g.vinsert_prompt_segments`. The first table entry applies to the first
+recording chunk, the second entry to the next chunk, etc.
+
+```lua
+vim.g.vinsert_prompt_segments = {
+  {
+    label = "REC: Content",
+    transformer = function(text)
+      return ("CONTENT:\n\n%s"):format(text)
+    end,
+  },
+  {
+    label = "REC: Instructions",
+    transformer = function(text)
+      return ("INSTRUCTIONS:\n\n%s"):format(text)
+    end,
+  },
+}
+```
+
+Labels are optional: when omitted, the indicator shows `REC` / `REC (n)` as
+before. Transformers are optional too—omitting them falls back to the original
+transcript for that segment.
 
 ### Debug logging
 

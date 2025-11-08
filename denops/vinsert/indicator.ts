@@ -23,6 +23,8 @@ let blinkToggle = false;
 let anchor: { bufnr: number; row: number } | null = null;
 let currentPhase: IndicatorPhase = "idle";
 let lastConfig: RuntimeConfig | null = null;
+let currentSegmentIndex = 1;
+let currentRecordingLabel: string | null = null;
 
 export function setIndicatorAnchor(
   value: { bufnr: number; row: number } | null,
@@ -50,9 +52,17 @@ export async function setPhase(
   denops: Denops,
   phase: IndicatorPhase,
   config: RuntimeConfig,
+  options?: { segmentIndex?: number; label?: string },
 ): Promise<void> {
   currentPhase = phase;
   lastConfig = config;
+  if (phase === "rec") {
+    currentSegmentIndex = Math.max(options?.segmentIndex ?? 1, 1);
+    currentRecordingLabel = options?.label ?? null;
+  } else if (phase === "idle") {
+    currentSegmentIndex = 1;
+    currentRecordingLabel = null;
+  }
   if (config.indicatorMode !== "virt") {
     await removeIndicator(denops, true);
     if (phase === "error") {
@@ -129,9 +139,16 @@ async function renderIndicator(
     ).catch(() => {});
     virtState = null;
   }
+  const displayLabel = phase === "rec"
+    ? formatRecordingLabel(
+      currentSegmentIndex,
+      true,
+      currentRecordingLabel ?? undefined,
+    )
+    : VIRT_LABELS[phase];
   const virtText = buildVirtText(
     phase,
-    VIRT_LABELS[phase],
+    displayLabel,
     config.indicatorHighlights,
   );
   const options: Record<string, unknown> = {
@@ -154,9 +171,17 @@ async function renderIndicator(
   );
   virtState = { bufnr: baseAnchor.bufnr, markId };
   if (phase === "rec") {
-    startBlink(denops, baseAnchor.bufnr, ns, row, config.indicatorHighlights);
+    startBlink(
+      denops,
+      baseAnchor.bufnr,
+      ns,
+      row,
+      config.indicatorHighlights,
+      currentSegmentIndex,
+    );
   } else {
     stopBlink();
+    currentRecordingLabel = null;
   }
 }
 
@@ -199,19 +224,38 @@ export function indicatorLabel(phase: IndicatorPhase): string {
   return VIRT_LABELS[phase];
 }
 
+function formatRecordingLabel(
+  segmentIndex: number,
+  filled: boolean,
+  custom?: string,
+): string {
+  const suffix = custom && custom.length > 0
+    ? custom
+    : segmentIndex >= 2
+    ? `REC (${segmentIndex})`
+    : "REC";
+  const bullet = filled ? "●" : "○";
+  return `${bullet} ${suffix}`;
+}
+
 function startBlink(
   denops: Denops,
   bufnr: number,
   ns: number,
   row: number,
   highlights: IndicatorHighlights,
+  segmentIndex: number,
 ): void {
   stopBlink();
   let currentRow = row;
   blinkTimer = setInterval(async () => {
     blinkToggle = !blinkToggle;
     if (!virtState) return;
-    const label = blinkToggle ? "● REC" : "○ REC";
+    const label = formatRecordingLabel(
+      segmentIndex,
+      !blinkToggle,
+      currentRecordingLabel ?? undefined,
+    );
     if (virtState.bufnr === bufnr) {
       try {
         const position = ensure(

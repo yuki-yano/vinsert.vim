@@ -56,6 +56,9 @@ Deno.test("createLastCaptureRecord clones session state", () => {
 
   assertEquals(capture.result.resolvedText, "result");
   assertEquals(capture.result.transcript, "transcript");
+  if (!capture.wav) {
+    throw new Error("wav should not be null for single-segment capture");
+  }
   assertEquals(Array.from(capture.wav), [1, 2, 3]);
   // Mutate original session to ensure capture keeps previous values.
   session.resolvedText = "mutated";

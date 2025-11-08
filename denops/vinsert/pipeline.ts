@@ -1,20 +1,21 @@
-import { prepareScratch, replaceScratch } from "./scratch.ts";
-import { finalizeUndo, insertStream } from "./buffer.ts";
+import { prepareScratch } from "./scratch.ts";
+import { finalizeUndo } from "./buffer.ts";
 import {
   transcribeBatch,
   transcribeProgressive,
   transcribeServer,
 } from "./stt.ts";
-import { streamGenerate } from "./llm.ts";
+import { type PromptMessage, streamGenerate } from "./llm.ts";
 import { yankToRegister } from "./yank.ts";
 import { emitCompletionEvent } from "./events.ts";
-import { logError, logInfo } from "./logger.ts";
+import { logError, logInfo, logWarn } from "./logger.ts";
 import type { Denops } from "./deps/denops.ts";
 import type { SessionContext } from "./session.ts";
 import type { LastCapture } from "./capture.ts";
 import { createLastCaptureRecord } from "./capture.ts";
 import type { StatusPhase } from "./status.ts";
 import { ensureSessionInsertReservation } from "./reservation.ts";
+import { is } from "./deps/unknownutil.ts";
 
 export type SessionId = string;
 
@@ -44,7 +45,6 @@ export async function runSessionPipeline(
   denops: Denops,
   sessionId: SessionId,
   session: SessionContext,
-  wav: Uint8Array,
   apiKey: string,
   source: "finishRecording" | "retry",
   deps: PipelineDeps,
@@ -54,17 +54,21 @@ export async function runSessionPipeline(
     denops,
     `[vinsert] ${label}: session=${sessionId} entering STT phase`,
   );
+  if (session.segments.length === 0) {
+    throw new Error("No audio segments recorded.");
+  }
   session.resolvedText = "";
   await deps.updateSessionPhase(denops, sessionId, "stt");
   await prepareSessionForPipeline(denops, session);
 
-  const transcript = await executeSttPhase(
+  const {
+    transcripts,
+    combinedTranscript,
+    retryAudio,
+  } = await executeSttPhase(
     denops,
-    sessionId,
     session,
-    wav,
     apiKey,
-    deps,
   );
   const current = deps.sessions.get(sessionId);
   if (!current || current.canceled) {
@@ -73,14 +77,21 @@ export async function runSessionPipeline(
 
   await logInfo(
     denops,
-    `[vinsert] STT completed: length=${transcript.length}`,
+    `[vinsert] STT completed: segments=${transcripts.length} totalLength=${combinedTranscript.length}`,
   );
+  const prompts = await applyPromptTransformers(
+    denops,
+    sessionId,
+    current,
+    transcripts,
+  );
+  const messages = buildMessagePayload(current.config.systemPrompt, prompts);
   await deps.updateSessionPhase(denops, sessionId, "gen");
   await executeGenerationPhase(
     denops,
     sessionId,
     current,
-    transcript,
+    messages,
     apiKey,
     deps,
   );
@@ -94,8 +105,8 @@ export async function runSessionPipeline(
     denops,
     sessionId,
     latest,
-    transcript,
-    wav,
+    combinedTranscript,
+    retryAudio,
     deps,
   );
 }
@@ -116,78 +127,114 @@ async function prepareSessionForPipeline(
   }
 }
 
+type SttPhaseResult = {
+  transcripts: string[];
+  combinedTranscript: string;
+  retryAudio: Uint8Array | null;
+};
+
 async function executeSttPhase(
   denops: Denops,
-  sessionId: SessionId,
   session: SessionContext,
-  wav: Uint8Array,
   apiKey: string,
-  deps: PipelineDeps,
-): Promise<string> {
-  const onPartial = createSttPartialHandler(denops, sessionId, deps);
+): Promise<SttPhaseResult> {
   session.sttController = new AbortController();
   const sttSignal = session.sttController.signal;
+  const retryAudio = session.segments.length === 1
+    ? session.segments[0].audioData.slice()
+    : null;
   try {
-    return await transcribeByMode(
-      denops,
-      session.config.sttStreamingMode,
-      wav,
-      {
-        apiKey,
-        config: session.config,
-        onPartial,
-        onStatus: async (message) => {
-          await logInfo(denops, message).catch(() => {});
-        },
-        signal: sttSignal,
-      },
+    const transcripts = await Promise.all(
+      session.segments.map(async (segment, index) => {
+        const text = await transcribeByMode(
+          denops,
+          session.config.sttStreamingMode,
+          segment.audioData,
+          {
+            apiKey,
+            config: session.config,
+            onPartial: () => {},
+            onStatus: async (message) => {
+              await logInfo(
+                denops,
+                `[vinsert] STT segment=${index + 1}: ${message}`,
+              ).catch(() => {});
+            },
+            signal: sttSignal,
+          },
+        );
+        segment.transcript = text;
+        segment.audioData = new Uint8Array();
+        return text;
+      }),
     );
+    const combinedTranscript = transcripts.join("\n\n");
+    return { transcripts, combinedTranscript, retryAudio };
   } finally {
     session.sttController = null;
   }
 }
 
-function createSttPartialHandler(
+async function applyPromptTransformers(
   denops: Denops,
   sessionId: SessionId,
-  deps: PipelineDeps,
-): (text: string) => void {
-  return (text: string) => {
-    logInfo(
-      denops,
-      `[vinsert] STT partial length=${text.length} session=${sessionId}`,
-    ).catch(() => {});
-    const current = deps.sessions.get(sessionId);
-    if (!current || current.canceled) {
-      return;
+  session: SessionContext,
+  transcripts: string[],
+): Promise<string[]> {
+  const prompts: string[] = [];
+  for (let index = 0; index < transcripts.length; index++) {
+    const text = transcripts[index] ?? "";
+    let prompt = text;
+    try {
+      const transformed = await denops.call(
+        "vinsert#apply_prompt_segment_transformer",
+        index,
+        text,
+      );
+      if (is.String(transformed)) {
+        prompt = transformed;
+      } else {
+        await logWarn(
+          denops,
+          `[vinsert] segment=${
+            index + 1
+          } transformer returned non-string (session=${sessionId})`,
+        ).catch(() => {});
+      }
+    } catch (error) {
+      const detail = error instanceof Error ? error.message : String(error);
+      await logWarn(
+        denops,
+        `[vinsert] segment=${index + 1} transformer error: ${detail}`,
+      ).catch(() => {});
+      prompt = text;
     }
-    if (current.mode === "insert" && current.reservation) {
-      Promise.resolve()
-        .then(async () => {
-          await deps.syncSessionAnchors(denops, current);
-          if (!current.reservation) {
-            return;
-          }
-          await insertStream(
-            denops,
-            current.reservation,
-            text,
-            { replace: true },
-          );
-        })
-        .catch(() => {});
+    if (session.segments[index]) {
+      session.segments[index].promptText = prompt;
     }
-    if (current.mode === "scratch" && current.scratchHandle) {
-      replaceScratch(denops, current.scratchHandle, text).catch(() => {});
-    }
-  };
+    prompts.push(prompt);
+  }
+  return prompts;
+}
+
+function buildMessagePayload(
+  systemPrompt: string,
+  prompts: string[],
+): PromptMessage[] {
+  const messages: PromptMessage[] = [
+    { role: "developer", content: systemPrompt },
+  ];
+  for (const prompt of prompts) {
+    messages.push({ role: "user", content: prompt });
+  }
+  return messages;
 }
 
 async function executeGenerationPhase(
   denops: Denops,
   sessionId: SessionId,
   session: SessionContext,
-  transcript: string,
+  messages: PromptMessage[],
   apiKey: string,
   deps: PipelineDeps,
 ): Promise<void> {
@@ -212,7 +259,7 @@ async function executeGenerationPhase(
   session.genController = new AbortController();
   const genSignal = session.genController.signal;
   try {
-    await streamGenerate(transcript, {
+    await streamGenerate(messages, {
       apiKey,
       config: session.config,
       signal: genSignal,
@@ -248,7 +295,7 @@ async function finalizeSessionRun(
   sessionId: SessionId,
   session: SessionContext,
   transcript: string,
-  wav: Uint8Array,
+  retryAudio: Uint8Array | null,
   deps: PipelineDeps,
 ): Promise<void> {
   const shouldYank = session.mode === "yank" || session.config.alwaysYank;
@@ -258,7 +305,12 @@ async function finalizeSessionRun(
   if (session.mode === "insert" && session.reservation) {
     await finalizeUndo(denops, session.reservation.bufnr);
   }
-  deps.setLastCapture(createLastCaptureRecord(session, transcript, wav));
+  const captureAudio = retryAudio && session.segments.length === 1
+    ? retryAudio
+    : null;
+  deps.setLastCapture(
+    createLastCaptureRecord(session, transcript, captureAudio),
+  );
   await logInfo(denops, "[vinsert] Generation finished.");
   await emitCompletionEvent(
     denops,

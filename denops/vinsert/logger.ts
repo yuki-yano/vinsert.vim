@@ -1,5 +1,6 @@
 import { type Denops, helper, variable } from "./deps/denops.ts";
 import { is } from "./deps/unknownutil.ts";
+import { emitLogEvent } from "./events.ts";
 
 const isError = is.InstanceOf(Error);
 
@@ -27,6 +28,7 @@ export async function logWarn(
     console.warn(message);
   }
   await helper.echoerr(denops, message).catch(() => {});
+  await emitLogEvent(denops, "warn", message).catch(() => {});
 }
 
 export async function logError(

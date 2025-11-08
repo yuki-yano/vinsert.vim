@@ -10,6 +10,7 @@ export type StatusSnapshot = {
   label: string;
   active: boolean;
   error: boolean;
+  segmentIndex: number;
 };
 
 export function toIndicatorPhase(phase: StatusPhase): IndicatorPhase {
@@ -31,14 +32,27 @@ export function toIndicatorPhase(phase: StatusPhase): IndicatorPhase {
 export function buildStatusSnapshot(
   phase: StatusPhase,
   mode: StatusMode,
+  segmentIndex = 1,
+  segmentLabel?: string | null,
 ): StatusSnapshot {
   const indicatorPhase = toIndicatorPhase(phase);
+  const normalizedIndex = Math.max(segmentIndex, 1);
+  const label = indicatorPhase === "rec"
+    ? (segmentLabel && segmentLabel.length > 0
+      ? segmentLabel
+      : recordingLabel(normalizedIndex))
+    : indicatorLabel(indicatorPhase);
   return {
     phase,
     mode,
     indicatorPhase,
-    label: indicatorLabel(indicatorPhase),
+    label,
     active: phase === "recording" || phase === "stt" || phase === "gen",
     error: phase === "error",
+    segmentIndex: normalizedIndex,
   };
+}
+
+function recordingLabel(segmentIndex: number): string {
+  return segmentIndex >= 2 ? `REC (${segmentIndex})` : "REC";
 }
